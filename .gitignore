@@ -1,0 +1,5 @@
+# Generated credentials and backups must stay out of Git.
+*.tar.gz
+*.backup
+.env
+connections.txt
