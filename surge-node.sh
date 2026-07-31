@@ -92,8 +92,13 @@ issue_cert() {
   if ss -lnt | awk '{print $4}' | grep -Eq '(:|\.)80$'; then
     die 'TCP 80 已被占用。为保护现有网站，本脚本拒绝继续；请改用 DNS 验证方案。'
   fi
-  info "使用 Certbot standalone 为 $domain 申请证书（需要公网 TCP 80）…"
-  certbot certonly --non-interactive --agree-tos --email "$email" --standalone -d "$domain"
+  if [[ -s "/etc/letsencrypt/live/$domain/fullchain.pem" && -s "/etc/letsencrypt/live/$domain/privkey.pem" ]] \
+    && openssl x509 -checkend 86400 -noout -in "/etc/letsencrypt/live/$domain/fullchain.pem" >/dev/null; then
+    info "检测到仍有效的 $domain 证书，直接复用。"
+  else
+    info "使用 Certbot standalone 为 $domain 申请证书（需要公网 TCP 80）…"
+    certbot certonly --non-interactive --agree-tos --email "$email" --standalone -d "$domain"
+  fi
   install -o root -g "$USER" -m 0640 "/etc/letsencrypt/live/$domain/fullchain.pem" "$TLS/fullchain.pem"
   install -o root -g "$USER" -m 0640 "/etc/letsencrypt/live/$domain/privkey.pem" "$TLS/privkey.pem"
   install -d -m 0750 /etc/letsencrypt/renewal-hooks/deploy
