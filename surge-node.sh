@@ -177,10 +177,10 @@ install_node() {
   port_free "$rp" || die "端口 $rp 已被占用。"; port_free "$tp" || die "端口 $tp 已被占用。"; valid_domain "$sni" || die 'Reality SNI 必须是域名。'
   issue_cert "$domain" "$email"
   uuid=$("$BIN" uuid); pair=$("$BIN" x25519)
-  # Xray releases have used both "Private key:" and "PrivateKey:" labels.
-  # Accept either form so a core update cannot make the installer misread keys.
+  # Xray releases have changed x25519 output labels across versions.
+  # Accept legacy and current labels so a core update cannot make the installer misread keys.
   private=$(awk -F ':' '/^Private ?[Kk]ey:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$pair")
-  public=$(awk -F ':' '/^Public ?[Kk]ey:/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$pair")
+  public=$(awk -F ':' '/^(Public ?[Kk]ey|Password \(PublicKey\)):/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' <<<"$pair")
   [[ -n "$private" && -n "$public" ]] || die 'Reality 密钥生成失败。'
   sid=$(openssl rand -hex 8); pass=$(password)
   write_config "$rp" "$tp" "$uuid" "$private" "$sid" "$sni" "$domain" "$pass"
