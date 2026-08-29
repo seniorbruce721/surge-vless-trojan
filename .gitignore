@@ -3,3 +3,4 @@
 *.backup
 .env
 connections.txt
+.worktrees/
