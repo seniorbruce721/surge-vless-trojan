@@ -15,6 +15,7 @@ readonly CONFIG="$DIR/config.conf"
 readonly META="$DIR/meta.env"
 readonly CONNECTIONS="$DIR/connections.txt"
 readonly PREVIOUS="$DIR/snell-server.previous"
+readonly OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
@@ -65,23 +66,71 @@ require_systemd_linux() {
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "不支持的 CPU 架构：$(uname -m)；仅支持 x86_64/aarch64。" ;; esac
 }
 
+detect_package_manager() {
+  local os_id='' os_like=''
+  [[ -r "$OS_RELEASE_FILE" ]] || die "无法读取 $OS_RELEASE_FILE，无法识别 Linux 发行版。"
+  # os-release is the operating-system supplied key/value file.
+  # shellcheck disable=SC1090
+  source "$OS_RELEASE_FILE"
+  os_id=${ID:-}
+  os_like=${ID_LIKE:-}
+
+  case "$os_id" in
+    debian|ubuntu) printf 'apt' ;;
+    fedora) printf 'dnf' ;;
+    rhel|rocky|almalinux|centos|ol)
+      if command -v dnf >/dev/null 2>&1; then
+        printf 'dnf'
+      elif command -v yum >/dev/null 2>&1; then
+        printf 'yum'
+      else
+        die "检测到 $os_id，但未找到 dnf 或 yum。"
+      fi
+      ;;
+    arch) printf 'pacman' ;;
+    *)
+      case " $os_like " in
+        *' debian '*) printf 'apt' ;;
+        *' rhel '*)
+          if command -v dnf >/dev/null 2>&1; then
+            printf 'dnf'
+          elif command -v yum >/dev/null 2>&1; then
+            printf 'yum'
+          else
+            die "检测到 $os_id（RHEL 兼容），但未找到 dnf 或 yum。"
+          fi
+          ;;
+        *) die "未识别的 Linux 发行版：ID=${os_id:-未知}，ID_LIKE=${os_like:-未知}。" ;;
+      esac
+      ;;
+  esac
+}
+
 install_dependencies() {
   local missing=() command pkg_manager
   for command in curl unzip openssl ss; do command -v "$command" >/dev/null 2>&1 || missing+=("$command"); done
   ((${#missing[@]} == 0)) && return
-  command -v apt-get >/dev/null 2>&1 && pkg_manager=apt || \
-    command -v dnf >/dev/null 2>&1 && pkg_manager=dnf || \
-    command -v yum >/dev/null 2>&1 && pkg_manager=yum || \
-    command -v apk >/dev/null 2>&1 && pkg_manager=apk || \
-    command -v pacman >/dev/null 2>&1 && pkg_manager=pacman || \
-    die "缺少命令：${missing[*]}；未识别包管理器，请手动安装后重试。"
+  pkg_manager=$(detect_package_manager)
   info "安装依赖：${missing[*]}"
   case "$pkg_manager" in
-    apt) apt-get update; apt-get install -y --no-install-recommends curl unzip openssl iproute2 ;;
-    dnf) dnf install -y curl unzip openssl iproute ;;
-    yum) yum install -y curl unzip openssl iproute ;;
-    apk) apk add --no-cache curl unzip openssl iproute2 ;;
-    pacman) pacman -Sy --noconfirm curl unzip openssl iproute2 ;;
+    apt)
+      command -v apt-get >/dev/null 2>&1 || die '检测到 Debian/Ubuntu，但未找到 apt-get。'
+      apt-get update
+      apt-get install -y --no-install-recommends curl unzip openssl iproute2
+      ;;
+    dnf)
+      command -v dnf >/dev/null 2>&1 || die '检测到 Fedora/RHEL 系统，但未找到 dnf。'
+      dnf install -y curl unzip openssl iproute
+      ;;
+    yum)
+      command -v yum >/dev/null 2>&1 || die '检测到 RHEL 系统，但未找到 yum。'
+      yum install -y curl unzip openssl iproute
+      ;;
+    pacman)
+      command -v pacman >/dev/null 2>&1 || die '检测到 Arch Linux，但未找到 pacman。'
+      pacman -Sy --noconfirm curl unzip openssl iproute2
+      ;;
+    *) die "内部错误：未知包管理器 $pkg_manager。" ;;
   esac
 }
 
