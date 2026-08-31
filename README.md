@@ -64,7 +64,7 @@ sudo ufw allow 80/tcp
 ## Snell 支持范围
 
 - 仅 Linux + systemd；CPU 仅 `x86_64`、`aarch64`。
-- 自动识别 `apt`、`dnf`、`yum`、`apk`、`pacman` 安装依赖；这意味着不再把系统版本硬编码为 Ubuntu 24.04 / Debian 12，但不等于承诺所有发行版都能运行。
+- 通过 `/etc/os-release` 识别发行版：Debian/Ubuntu 使用 `apt`，Fedora 使用 `dnf`，RHEL/Rocky/AlmaLinux 等按实际可用工具选择 `dnf` 或 `yum`，仅 Arch Linux 使用 `pacman`。未识别系统会明确退出；这意味着不再把系统版本硬编码为 Ubuntu 24.04 / Debian 12，但不等于承诺所有发行版都能运行。
 - 只下载官方 `dl.nssurge.com` 的当前可用版本：Snell v4.1.1、v5.0.1（默认推荐）、v6.0.0rc2 Beta。
 - v1-v3 不自动安装：当前官方地址不提供可验证的安装包，脚本不会改用未知第三方镜像。
 - v6 是 Beta；使用前确认 Surge 客户端版本支持 Snell v6。仅提供 `default` 和 `unshaped`，不提供风险更高的 `unsafe-raw`。
