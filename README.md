@@ -68,13 +68,22 @@ sudo ufw allow 80/tcp
 - 只下载官方 `dl.nssurge.com` 的当前可用版本：Snell v4.1.1、v5.0.1（默认推荐）、v6.0.0rc2 Beta。
 - v1-v3 不自动安装：当前官方地址不提供可验证的安装包，脚本不会改用未知第三方镜像。
 - v6 是 Beta；使用前确认 Surge 客户端版本支持 Snell v6。仅提供 `default` 和 `unshaped`，不提供风险更高的 `unsafe-raw`。
+- v4/v5 按官方支持边界仅生成 `0.0.0.0:PORT`；v6 才支持逗号分隔的多地址 `listen`。
+
+## IPv6 / 双栈策略
+
+- 脚本会同时检查 global scope IPv6 和绑定该地址的 IPv6 公网连通性，并排除 loopback、link-local、ULA、文档地址、tentative、dadfailed 与 deprecated 地址。出站探测使用 `curl -6` 访问 Cloudflare trace，不发送 Snell PSK 或配置内容。
+- Snell v4/v5 始终使用 `listen = 0.0.0.0:PORT`。即使 VPS 有 IPv6，`repair-dualstack` 也不会将 v5 强行改成 v6 语法。
+- Snell v6 只在检测到可用公网 IPv6 时使用 `listen = 0.0.0.0:PORT,[::]:PORT`；否则安全回落为 IPv4-only。
+- 脚本不修改防火墙或云安全组。双栈监听成功不等于 IPv6 入站已放行，仍需在单台测试机验证。
 
 ## 安全边界
 
 1. 不修改 SSH、UFW、云安全组、sysctl、BBR、时区。
 2. 下载限定 HTTPS，并校验 zip 完整性和二进制能否执行；下载失败时停止，不切换第三方来源。
 3. 自动随机生成 PSK；连接信息只写入服务器的 `/etc/snell-node/connections.txt`（权限 `640`），不会上传到 GitHub。
-4. `update` 更新失败会尝试回滚二进制；`uninstall` 仅删除本脚本创建的服务、程序与 `/etc/snell-node`，不碰防火墙规则。
+4. `update` 与 `repair-dualstack` 在修改前生成 `config.conf.bak-UTC时间戳-PID`；新服务或预期监听验证失败时，自动恢复旧配置、旧二进制并重启旧服务。
+5. `uninstall` 仅删除本脚本创建的服务、程序与 `/etc/snell-node`，不碰防火墙规则。
 
 ## 安装
 
@@ -95,7 +104,26 @@ sudo bash snell-node.sh status
 sudo bash snell-node.sh show
 sudo bash snell-node.sh update
 sudo bash snell-node.sh update 6
+sudo bash snell-node.sh repair-dualstack
 sudo bash snell-node.sh uninstall
 ```
 
 `show` 会显示 PSK，避免截图、发送到聊天软件或提交到 GitHub。Surge 的 Snell 版本必须与服务端安装版本一致；v6 的客户端兼容性请以 [Surge 官方 Snell 文档](https://manual.nssurge.com/policies/snell.html) 为准。
+
+现有 v6 节点使用 `repair-dualstack` 只修改 `listen`，保留 PSK、端口、模式和 systemd 服务。现有 v5 节点若需要 IPv6 入站，必须明确执行 `update 6`；该操作保留 PSK 和端口，但必须同步将 Surge 节点改为 `version=6` 并配置匹配的 `mode`。
+
+如果只是 `repair-dualstack` 后需要恢复原监听配置（Snell 大版本未改变），可手动恢复已保留的配置备份：
+
+```bash
+sudo cp -p /etc/snell-node/config.conf.bak-具体时间戳-PID /etc/snell-node/config.conf
+sudo systemctl restart snell-node
+sudo bash snell-node.sh status
+```
+
+如果已成功从 v5 迁移到 v6，后续需要完整退回 v5，不要只恢复配置文件；应执行事务化降级，让脚本同时恢复 v5 二进制、配置和连接元数据：
+
+```bash
+sudo bash snell-node.sh update 5
+```
+
+随后将 Surge 节点改回 `version=5`。PSK 和端口仍保持不变。
