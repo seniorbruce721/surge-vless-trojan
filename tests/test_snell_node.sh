@@ -7,6 +7,7 @@ SCRIPT="$ROOT/snell-node.sh"
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "expected [$2], got [$1]"; }
 assert_contains() { [[ "$1" == *"$2"* ]] || fail "expected output to contain [$2], got [$1]"; }
+assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "expected output not to contain [$2], got [$1]"; }
 assert_true() { "$@" || fail "expected success: $*"; }
 assert_false() { if "$@"; then fail "expected failure: $*"; fi; }
 
@@ -28,6 +29,8 @@ assert_eq "$(surge_line 5 snell.example.com 6160 example-psk default)" \
   'Personal-Snell = snell, snell.example.com, 6160, psk=example-psk, version=5, reuse=true'
 assert_eq "$(surge_line 6 snell.example.com 6160 example-psk default)" \
   'Personal-Snell = snell, snell.example.com, 6160, psk=example-psk, version=6, mode=default, reuse=true'
+assert_eq "$(surge_line 6 snell.example.com 6160 example-psk unshaped)" \
+  'Personal-Snell = snell, snell.example.com, 6160, psk=example-psk, version=6, mode=unshaped, reuse=true'
 
 assert_eq "$(listen_value 4 6160 yes yes)" '0.0.0.0:6160'
 assert_eq "$(listen_value 5 6160 yes yes)" '0.0.0.0:6160'
@@ -47,6 +50,16 @@ psk = keep-this-psk
 version = 6
 tfo = true
 mode = default'
+v6_default_config=$(render_config 6 6160 keep-this-psk default '0.0.0.0:6160,[::]:6160')
+assert_not_contains "$v6_default_config" 'dns-ip-preference'
+assert_not_contains "$v6_default_config" 'ipv6 ='
+assert_eq "$(render_config 6 6160 keep-this-psk unshaped '0.0.0.0:6160,[::]:6160')" \
+  '[snell-server]
+listen = 0.0.0.0:6160,[::]:6160
+psk = keep-this-psk
+version = 6
+tfo = true
+mode = unshaped'
 
 TEST_TMP=$(mktemp -d)
 trap 'rm -rf "$TEST_TMP"' EXIT
@@ -213,6 +226,7 @@ listen = 0.0.0.0:6160
 psk = keep-this-psk
 version = 5
 tfo = true
+ipv6 = false
 custom-option = keep-this-value
 EOF
 original_config=$(cat "$CONFIG_FIXTURE")
@@ -238,6 +252,7 @@ assert_contains "$rewritten_config" 'psk = keep-this-psk'
 assert_contains "$rewritten_config" 'version = 6'
 assert_contains "$rewritten_config" 'mode = default'
 assert_contains "$rewritten_config" 'custom-option = keep-this-value'
+assert_not_contains "$rewritten_config" 'ipv6 ='
 
 DOWNGRADE_CONFIG="$TEST_TMP/downgrade.conf"
 cp "$CONFIG_FIXTURE" "$DOWNGRADE_CONFIG"
@@ -324,7 +339,12 @@ fi
 assert_contains "$inactive_repair_output" 'simulated snell failure'
 
 V6_REPAIR_CONFIG="$TEST_TMP/v6-repair.conf"
-render_config 6 6160 keep-this-psk default '0.0.0.0:6160' > "$V6_REPAIR_CONFIG"
+render_config 6 6160 keep-this-psk unshaped '0.0.0.0:6160' > "$V6_REPAIR_CONFIG"
+cat >> "$V6_REPAIR_CONFIG" <<'EOF'
+ipv6 = true
+dns-ip-preference = prefer-ipv6
+custom-option = keep-this-value
+EOF
 : > "$SYSTEMCTL_LOG"
 v6_repair_output=$(env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
   'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
@@ -335,11 +355,39 @@ v6_repair_output=$(env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTP
 v6_repaired_config=$(cat "$V6_REPAIR_CONFIG")
 assert_contains "$v6_repaired_config" 'listen = 0.0.0.0:6160,[::]:6160'
 assert_contains "$v6_repaired_config" 'psk = keep-this-psk'
+assert_contains "$v6_repaired_config" 'mode = unshaped'
+assert_contains "$v6_repaired_config" 'dns-ip-preference = prefer-ipv6'
+assert_contains "$v6_repaired_config" 'custom-option = keep-this-value'
+assert_not_contains "$v6_repaired_config" 'ipv6 ='
 assert_contains "$v6_repair_output" '已完成原地双栈修复'
 restart_count=$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")
 assert_eq "$restart_count" 1
 backup_count=$(find "$TEST_TMP" -maxdepth 1 -name 'v6-repair.conf.bak-*' | wc -l | tr -d ' ')
 assert_eq "$backup_count" 1
+
+V6_CLEANUP_CONFIG="$TEST_TMP/v6-cleanup.conf"
+render_config 6 6160 keep-this-psk default '0.0.0.0:6160,[::]:6160' > "$V6_CLEANUP_CONFIG"
+cat >> "$V6_CLEANUP_CONFIG" <<'EOF'
+ipv6 = false
+dns-ip-preference = default
+EOF
+: > "$SYSTEMCTL_LOG"
+v6_cleanup_output=$(env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
+  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+  SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
+    source "$1"
+    repair_dualstack_node "$2" ""
+  ' bash "$SCRIPT" "$V6_CLEANUP_CONFIG")
+v6_cleaned_config=$(cat "$V6_CLEANUP_CONFIG")
+assert_contains "$v6_cleaned_config" 'listen = 0.0.0.0:6160,[::]:6160'
+assert_contains "$v6_cleaned_config" 'psk = keep-this-psk'
+assert_contains "$v6_cleaned_config" 'mode = default'
+assert_contains "$v6_cleaned_config" 'dns-ip-preference = default'
+assert_not_contains "$v6_cleaned_config" 'ipv6 ='
+assert_contains "$v6_cleanup_output" '已完成原地双栈修复'
+assert_eq "$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")" 1
+cleanup_backup_count=$(find "$TEST_TMP" -maxdepth 1 -name 'v6-cleanup.conf.bak-*' | wc -l | tr -d ' ')
+assert_eq "$cleanup_backup_count" 1
 
 help_output=$(SNELL_NODE_NO_MAIN=0 bash "$SCRIPT" help)
 assert_contains "$help_output" 'repair-dualstack'
@@ -362,7 +410,7 @@ sed \
   -e "s|/etc/systemd/system|$LIFECYCLE_ROOT/etc/systemd/system|g" \
   "$SCRIPT" > "$LIFECYCLE_SCRIPT"
 : > "$SYSTEMCTL_LOG"
-env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=no SS_UDP6=no \
+env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     require_systemd_linux() { :; }
@@ -399,6 +447,18 @@ env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=no SS_UDP6=no \
     install_node 5 >/dev/null
     cp "$CONFIG" "$2/config-after-reinstall.conf"
     uninstall_node <<< "y"
+    ask() {
+      case "$1" in
+        *"连接地址"*) printf "snell.example.com" ;;
+        *"端口"*) printf "6160" ;;
+        *"模式"*) printf "unshaped" ;;
+        *) return 1 ;;
+      esac
+    }
+    install_node 6 >/dev/null
+    cp "$CONFIG" "$2/config-after-v6-install.conf"
+    cp "$CONNECTIONS" "$2/connections-after-v6-install.txt"
+    uninstall_node <<< "y"
   ' bash "$LIFECYCLE_SCRIPT" "$LIFECYCLE_ROOT"
 
 lifecycle_config=$(cat "$LIFECYCLE_ROOT/config-after-install.conf")
@@ -409,6 +469,17 @@ assert_contains "$lifecycle_config" 'version = 5'
 reinstall_config=$(cat "$LIFECYCLE_ROOT/config-after-reinstall.conf")
 assert_contains "$reinstall_config" 'listen = 0.0.0.0:6160'
 assert_contains "$reinstall_config" 'version = 5'
+v6_install_config=$(cat "$LIFECYCLE_ROOT/config-after-v6-install.conf")
+assert_contains "$v6_install_config" 'listen = 0.0.0.0:6160,[::]:6160'
+assert_contains "$v6_install_config" 'psk = lifecycle-test-psk'
+assert_contains "$v6_install_config" 'version = 6'
+assert_contains "$v6_install_config" 'mode = unshaped'
+assert_not_contains "$v6_install_config" 'dns-ip-preference'
+assert_not_contains "$v6_install_config" 'ipv6 ='
+v6_install_connections=$(cat "$LIFECYCLE_ROOT/connections-after-v6-install.txt")
+assert_contains "$v6_install_connections" 'version=6, mode=unshaped'
+assert_contains "$v6_install_connections" 'snell.example.com, 6160'
+assert_contains "$v6_install_connections" 'psk=lifecycle-test-psk'
 lifecycle_meta=$(cat "$LIFECYCLE_ROOT/meta-after-install.env")
 assert_contains "$lifecycle_meta" 'PORT=6160'
 assert_contains "$lifecycle_meta" 'PSK=lifecycle-test-psk'
@@ -417,8 +488,8 @@ assert_contains "$lifecycle_service" 'User=snell-node'
 assert_contains "$lifecycle_service" 'Group=snell-node'
 assert_contains "$lifecycle_service" 'Restart=on-failure'
 assert_contains "$lifecycle_service" "ExecStart=$LIFECYCLE_ROOT/usr/local/bin/snell-server -c $LIFECYCLE_ROOT/etc/snell-node/config.conf"
-assert_eq "$(grep -c '^enable --now snell-node$' "$SYSTEMCTL_LOG")" 2
-assert_eq "$(grep -c '^disable --now snell-node$' "$SYSTEMCTL_LOG")" 2
+assert_eq "$(grep -c '^enable --now snell-node$' "$SYSTEMCTL_LOG")" 3
+assert_eq "$(grep -c '^disable --now snell-node$' "$SYSTEMCTL_LOG")" 3
 [[ ! -e "$LIFECYCLE_ROOT/etc/snell-node" ]] || fail 'uninstall left the Snell config directory behind'
 [[ ! -e "$LIFECYCLE_ROOT/usr/local/bin/snell-server" ]] || fail 'uninstall left the Snell binary behind'
 [[ ! -e "$LIFECYCLE_ROOT/etc/systemd/system/snell-node.service" ]] || fail 'uninstall left the systemd unit behind'
@@ -436,6 +507,8 @@ listen = 0.0.0.0:6160
 psk = update-test-psk
 version = 5
 tfo = true
+ipv6 = false
+dns-ip-preference = prefer-ipv6
 custom-option = keep-this-value
 EOF
 cat > "$UPDATE_ROOT/etc/snell-node/meta.env" <<'EOF'
@@ -467,14 +540,75 @@ updated_config=$(cat "$UPDATE_ROOT/etc/snell-node/config.conf")
 assert_contains "$updated_config" 'listen = 0.0.0.0:6160,[::]:6160'
 assert_contains "$updated_config" 'psk = update-test-psk'
 assert_contains "$updated_config" 'version = 6'
+assert_contains "$updated_config" 'mode = default'
+assert_contains "$updated_config" 'dns-ip-preference = prefer-ipv6'
 assert_contains "$updated_config" 'custom-option = keep-this-value'
+assert_not_contains "$updated_config" 'ipv6 ='
 updated_meta=$(cat "$UPDATE_ROOT/etc/snell-node/meta.env")
 assert_contains "$updated_meta" 'VERSION=6'
 assert_contains "$updated_meta" 'PORT=6160'
 assert_contains "$updated_meta" 'PSK=update-test-psk'
+assert_contains "$updated_meta" 'MODE=default'
+updated_connections=$(cat "$UPDATE_ROOT/etc/snell-node/connections.txt")
+assert_contains "$updated_connections" 'version=6, mode=default'
+assert_contains "$updated_connections" 'snell.example.com, 6160'
+assert_contains "$updated_connections" 'psk=update-test-psk'
+dynamic_show_output=$(env "PATH=$FAKE_BIN:$PATH" SNELL_NODE_NO_MAIN=1 bash -c '
+  source "$1"
+  rewrite_config_file "$CONFIG" 6 "0.0.0.0:6160,[::]:6160" unshaped ""
+  show_node
+' bash "$UPDATE_SCRIPT")
+assert_contains "$dynamic_show_output" 'version=6, mode=unshaped'
+assert_not_contains "$dynamic_show_output" 'version=6, mode=default'
 assert_eq "$(cat "$UPDATE_ROOT/usr/local/bin/snell-server")" 'snell-v6-binary'
 assert_eq "$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")" 1
 update_backup_count=$(find "$UPDATE_ROOT/etc/snell-node" -maxdepth 1 -name 'config.conf.bak-*' | wc -l | tr -d ' ')
 assert_eq "$update_backup_count" 1
+
+UPDATE_FAILURE_ROOT="$TEST_TMP/update-failure-root"
+UPDATE_FAILURE_SCRIPT="$TEST_TMP/snell-node-update-failure.sh"
+mkdir -p "$UPDATE_FAILURE_ROOT/etc/snell-node" "$UPDATE_FAILURE_ROOT/usr/local/bin"
+sed \
+  -e "s|readonly DIR='/etc/snell-node'|readonly DIR='$UPDATE_FAILURE_ROOT/etc/snell-node'|" \
+  -e "s|readonly BIN='/usr/local/bin/snell-server'|readonly BIN='$UPDATE_FAILURE_ROOT/usr/local/bin/snell-server'|" \
+  "$SCRIPT" > "$UPDATE_FAILURE_SCRIPT"
+cat > "$UPDATE_FAILURE_ROOT/etc/snell-node/config.conf" <<'EOF'
+[snell-server]
+listen = 0.0.0.0:6160
+psk = rollback-test-psk
+version = 5
+tfo = true
+ipv6 = false
+EOF
+cat > "$UPDATE_FAILURE_ROOT/etc/snell-node/meta.env" <<'EOF'
+VERSION=5
+HOST=snell.example.com
+PORT=6160
+PSK=rollback-test-psk
+MODE=default
+EOF
+printf 'snell-v5-binary\n' > "$UPDATE_FAILURE_ROOT/usr/local/bin/snell-server"
+update_failure_original_config=$(cat "$UPDATE_FAILURE_ROOT/etc/snell-node/config.conf")
+set +e
+update_failure_output=$(env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=no \
+  SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
+    source "$1"
+    require_systemd_linux() { :; }
+    install_dependencies() { :; }
+    download_binary() { printf "snell-v6-binary\n" > "$BIN.new"; chmod 0755 "$BIN.new"; }
+    collect_network_state() {
+      IPV4_DETECTED=yes
+      IPV6_DETECTED=yes
+      IPV6_CONNECTIVITY=yes
+      PUBLIC_IPV6=2408:8210::10
+    }
+    update_node 6
+  ' bash "$UPDATE_FAILURE_SCRIPT" 2>&1)
+update_failure_rc=$?
+set -e
+assert_eq "$update_failure_rc" 1
+assert_contains "$update_failure_output" '已恢复旧配置、旧二进制和旧服务'
+assert_eq "$(cat "$UPDATE_FAILURE_ROOT/etc/snell-node/config.conf")" "$update_failure_original_config"
+assert_eq "$(cat "$UPDATE_FAILURE_ROOT/usr/local/bin/snell-server")" 'snell-v5-binary'
 
 printf 'PASS: Snell lifecycle, IPv6 policy, runtime validation, config backup, and rollback\n'

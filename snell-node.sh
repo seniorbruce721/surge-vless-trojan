@@ -213,6 +213,9 @@ rewrite_config_file() {
       if (version == "6") print "mode = " mode
       next
     }
+    /^[[:space:]]*ipv6[[:space:]]*=/ {
+      if (version == "6") next
+    }
     { print }
     END {
       if (!have_listen) print "listen = " listen
@@ -463,7 +466,24 @@ status_node() {
   fi
 }
 
-show_node() { [[ -f "$CONNECTIONS" ]] || die '未找到连接信息。'; cat "$CONNECTIONS"; }
+show_node() {
+  local version host listen port psk mode
+  [[ -f "$CONFIG" && -f "$META" ]] || die '未找到连接信息。'
+  version=$(config_value "$CONFIG" version)
+  listen=$(config_value "$CONFIG" listen)
+  port=$(listen_port "$listen")
+  psk=$(config_value "$CONFIG" psk)
+  mode=$(config_value "$CONFIG" mode)
+  mode=${mode:-default}
+  host=$(config_value "$META" HOST)
+  is_supported_version "$version" || die '无法从当前配置读取有效版本。'
+  valid_port "$port" || die '无法从当前配置读取有效端口。'
+  [[ -n "$psk" && -n "$host" ]] || die '当前配置缺少 PSK 或 Surge 连接地址。'
+  printf '# 敏感文件：不要上传、截图或分享。\n'
+  printf '# 复制下面一行至 Surge 配置的 [Proxy] 段：\n'
+  surge_line "$version" "$host" "$port" "$psk" "$mode"
+  printf '\n'
+}
 
 update_node() {
   local version="${1:-}" mode listen config_backup current_version current_listen current_port current_psk
@@ -517,7 +537,7 @@ repair_dualstack_node() {
   mode=${mode:-default}
   collect_network_state
   desired=$(listen_value "$version" "$port" "$IPV6_DETECTED" "$IPV6_CONNECTIVITY")
-  if [[ "$listen" == "$desired" ]]; then
+  if [[ "$listen" == "$desired" ]] && ! grep -Eq '^[[:space:]]*ipv6[[:space:]]*=' "$config"; then
     info '当前 Snell v6 监听配置已符合检测结果，无需修改。'
     status_node "$config"
     return

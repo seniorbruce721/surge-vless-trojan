@@ -75,7 +75,13 @@ sudo ufw allow 80/tcp
 - 脚本会同时检查 global scope IPv6 和绑定该地址的 IPv6 公网连通性，并排除 loopback、link-local、ULA、文档地址、tentative、dadfailed 与 deprecated 地址。出站探测使用 `curl -6` 访问 Cloudflare trace，不发送 Snell PSK 或配置内容。
 - Snell v4/v5 始终使用 `listen = 0.0.0.0:PORT`。即使 VPS 有 IPv6，`repair-dualstack` 也不会将 v5 强行改成 v6 语法。
 - Snell v6 只在检测到可用公网 IPv6 时使用 `listen = 0.0.0.0:PORT,[::]:PORT`；否则安全回落为 IPv4-only。
+- Snell v6 新配置不写旧的 `ipv6` 参数。执行 `update 6` 或 v6 的 `repair-dualstack` 时，脚本会在备份配置后删除遗留的 `ipv6 = true/false`，避免 RC2 兼容映射意外限制出站地址族。
 - 脚本不修改防火墙或云安全组。双栈监听成功不等于 IPv6 入站已放行，仍需在单台测试机验证。
+
+IPv4 / IPv6 有两层独立策略，不要混为一件事：
+
+1. **Surge 客户端 → Snell VPS**：由 Surge 节点的 IP Version / 地址族策略控制，例如 `dual`、`v4-only`、`v6-only`、`prefer-v4`、`prefer-v6`。它决定客户端用 IPv4 还是 IPv6 连接 VPS。
+2. **Snell VPS → 目标网站**：由 Snell v6 服务端的 `dns-ip-preference` 控制 DNS 结果地址族。脚本默认不写该项，保持 RC2 官方的 `default` 语义；不预设 `prefer-ipv4`、`prefer-ipv6` 或 `ipv4-only`，也不做自动测速。如果现有配置已由用户显式设置 `dns-ip-preference`，更新和修复流程会原样保留。
 
 ## 安全边界
 
@@ -95,6 +101,12 @@ cd surge-vless-trojan
 sudo bash snell-node.sh install
 ```
 
+如果要明确安装 Snell v6.0.0rc2，将上面最后一条命令换成：
+
+```bash
+sudo bash snell-node.sh install 6
+```
+
 安装时依次填写：Snell 大版本、给 Surge 使用的域名或公网 IP、端口；v6 还会询问模式。成功后会直接打印一行可复制到 Surge 配置 `[Proxy]` 段的内容。
 
 常用命令：
@@ -108,9 +120,9 @@ sudo bash snell-node.sh repair-dualstack
 sudo bash snell-node.sh uninstall
 ```
 
-`show` 会显示 PSK，避免截图、发送到聊天软件或提交到 GitHub。Surge 的 Snell 版本必须与服务端安装版本一致；v6 的客户端兼容性请以 [Surge 官方 Snell 文档](https://manual.nssurge.com/policies/snell.html) 为准。
+`show` 会从当前 `config.conf` 实时生成 Surge 节点并显示 PSK，避免截图、发送到聊天软件或提交到 GitHub。Surge 的 Snell 版本必须与服务端安装版本一致；v6 的 `mode` 也必须一致：服务端 `mode = default` 对应 Surge `version=6, mode=default`，服务端 `mode = unshaped` 对应 Surge `version=6, mode=unshaped`。v6 的客户端兼容性请以 [Surge 官方 Snell 文档](https://manual.nssurge.com/policies/snell.html) 为准。
 
-现有 v6 节点使用 `repair-dualstack` 只修改 `listen`，保留 PSK、端口、模式和 systemd 服务。现有 v5 节点若需要 IPv6 入站，必须明确执行 `update 6`；该操作保留 PSK 和端口，但必须同步将 Surge 节点改为 `version=6` 并配置匹配的 `mode`。
+现有 v6 节点使用 `repair-dualstack` 只修正 `listen` 并清理 deprecated `ipv6` 行，保留 PSK、端口、模式、显式设置的 `dns-ip-preference` 和 systemd 服务。现有 v5 节点若需要 IPv6 入站，必须明确执行 `update 6`；该操作保留 PSK 和端口，清理可能影响 RC2 的旧 `ipv6` 行，但必须同步将 Surge 节点改为 `version=6` 并配置匹配的 `mode`。
 
 如果只是 `repair-dualstack` 后需要恢复原监听配置（Snell 大版本未改变），可手动恢复已保留的配置备份：
 
