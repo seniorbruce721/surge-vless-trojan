@@ -189,18 +189,29 @@ assert_false env "PATH=$FAKE_BIN:$PATH" SNELL_NODE_NO_MAIN=1 bash -c '
 ' bash "$SCRIPT" "$MISSING_REWRITE_CONFIG" 2>/dev/null
 [[ ! -e "$MISSING_REWRITE_CONFIG" ]] || fail 'failed config read created a replacement config'
 
-assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=no SS_UDP6=no \
+assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
   'source "$1"; validate_runtime 5 6160 "0.0.0.0:6160"' bash "$SCRIPT"
-assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=no SS_UDP6=no \
+assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
   'source "$1"; validate_runtime 6 6160 "0.0.0.0:6160"' bash "$SCRIPT"
-assert_false env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=no \
+assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
   'source "$1"; validate_runtime 6 6160 "0.0.0.0:6160,[::]:6160"' bash "$SCRIPT"
-assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+assert_false env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
   'source "$1"; validate_runtime 6 6160 "0.0.0.0:6160,[::]:6160"' bash "$SCRIPT"
+
+assert_true env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
+  SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
+  'source "$1"; validate_configured_runtime "$2" 6 6160 "0.0.0.0:6160,[::]:6160"' \
+  bash "$SCRIPT" "$NEW_CONFIG"
+MISMATCH_CONFIG="$TEST_TMP/mismatched-listen.conf"
+render_config 6 6160 keep-this-psk default '0.0.0.0:6160' > "$MISMATCH_CONFIG"
+assert_false env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
+  SYSTEMCTL_ACTIVE=yes SNELL_NODE_NO_MAIN=1 bash -c \
+  'source "$1"; validate_configured_runtime "$2" 6 6160 "0.0.0.0:6160,[::]:6160"' \
+  bash "$SCRIPT" "$MISMATCH_CONFIG"
 
 IP4_OUTPUT='2: eth0 inet 192.0.2.10/24 scope global eth0'
 IP6_OUTPUT='2: eth0 inet6 2408:8210::10/64 scope global dynamic'
@@ -269,19 +280,33 @@ printf 'new binary\n' > "$BINARY_FIXTURE"
 printf 'old binary\n' > "$BINARY_BACKUP"
 SYSTEMCTL_LOG="$TEST_TMP/systemctl.log"
 : > "$SYSTEMCTL_LOG"
-if env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=no \
+env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
+  SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
+    source "$1"
+    activate_runtime_change "$2" "$3" 6 6160 "0.0.0.0:6160,[::]:6160" default "$4" "$5"
+  ' bash "$SCRIPT" "$CONFIG_FIXTURE" "$config_backup" "$BINARY_FIXTURE" "$BINARY_BACKUP"
+assert_contains "$(cat "$CONFIG_FIXTURE")" 'listen = 0.0.0.0:6160,[::]:6160'
+assert_eq "$(cat "$BINARY_FIXTURE")" 'new binary'
+restart_count=$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")
+assert_eq "$restart_count" 1
+rollback_validation_count=$(grep -c '^is-active --quiet snell-node$' "$SYSTEMCTL_LOG")
+assert_eq "$rollback_validation_count" 1
+
+cp "$config_backup" "$CONFIG_FIXTURE"
+printf 'new binary\n' > "$BINARY_FIXTURE"
+printf 'old binary\n' > "$BINARY_BACKUP"
+: > "$SYSTEMCTL_LOG"
+if env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     activate_runtime_change "$2" "$3" 6 6160 "0.0.0.0:6160,[::]:6160" default "$4" "$5"
   ' bash "$SCRIPT" "$CONFIG_FIXTURE" "$config_backup" "$BINARY_FIXTURE" "$BINARY_BACKUP"; then
-  fail 'runtime change unexpectedly succeeded without UDP IPv6 listener'
+  fail 'runtime change unexpectedly succeeded without an IPv6 TCP listener'
 fi
 assert_eq "$(cat "$CONFIG_FIXTURE")" "$original_config"
 assert_eq "$(cat "$BINARY_FIXTURE")" 'old binary'
-restart_count=$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")
-assert_eq "$restart_count" 2
-rollback_validation_count=$(grep -c '^is-active --quiet snell-node$' "$SYSTEMCTL_LOG")
-assert_eq "$rollback_validation_count" 2
+assert_eq "$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")" 2
+assert_eq "$(grep -c '^is-active --quiet snell-node$' "$SYSTEMCTL_LOG")" 2
 
 cp "$config_backup" "$CONFIG_FIXTURE"
 printf 'new binary\n' > "$BINARY_FIXTURE"
@@ -304,7 +329,7 @@ printf 'new binary\n' > "$BINARY_FIXTURE"
 rm -f "$BINARY_BACKUP"
 : > "$SYSTEMCTL_LOG"
 set +e
-env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=no \
+env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     activate_runtime_change "$2" "$3" 6 6160 "0.0.0.0:6160,[::]:6160" default "$4" "$5"
@@ -347,7 +372,7 @@ custom-option = keep-this-value
 EOF
 : > "$SYSTEMCTL_LOG"
 v6_repair_output=$(env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
-  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     repair_dualstack_node "$2" ""
@@ -373,7 +398,7 @@ dns-ip-preference = default
 EOF
 : > "$SYSTEMCTL_LOG"
 v6_cleanup_output=$(env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
-  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     repair_dualstack_node "$2" ""
@@ -410,19 +435,14 @@ sed \
   -e "s|/etc/systemd/system|$LIFECYCLE_ROOT/etc/systemd/system|g" \
   "$SCRIPT" > "$LIFECYCLE_SCRIPT"
 : > "$SYSTEMCTL_LOG"
-env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
+  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     require_systemd_linux() { :; }
     install_dependencies() { :; }
     prepare_dir() { install -d -m 0750 "$DIR"; }
     download_binary() { printf "snell-v5-binary\n" > "$BIN.new"; chmod 0755 "$BIN.new"; }
-    collect_network_state() {
-      IPV4_DETECTED=yes
-      IPV6_DETECTED=yes
-      IPV6_CONNECTIVITY=yes
-      PUBLIC_IPV6=2408:8210::10
-    }
     ask() {
       case "$1" in
         *"连接地址"*) printf "snell.example.com" ;;
@@ -456,6 +476,8 @@ env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
       esac
     }
     install_node 6 >/dev/null
+    systemctl restart "$UNIT"
+    validate_configured_runtime "$CONFIG" 6 6160 "0.0.0.0:6160,[::]:6160"
     cp "$CONFIG" "$2/config-after-v6-install.conf"
     cp "$CONNECTIONS" "$2/connections-after-v6-install.txt"
     uninstall_node <<< "y"
@@ -490,9 +512,49 @@ assert_contains "$lifecycle_service" 'Restart=on-failure'
 assert_contains "$lifecycle_service" "ExecStart=$LIFECYCLE_ROOT/usr/local/bin/snell-server -c $LIFECYCLE_ROOT/etc/snell-node/config.conf"
 assert_eq "$(grep -c '^enable --now snell-node$' "$SYSTEMCTL_LOG")" 3
 assert_eq "$(grep -c '^disable --now snell-node$' "$SYSTEMCTL_LOG")" 3
+assert_eq "$(grep -c '^restart snell-node$' "$SYSTEMCTL_LOG")" 1
 [[ ! -e "$LIFECYCLE_ROOT/etc/snell-node" ]] || fail 'uninstall left the Snell config directory behind'
 [[ ! -e "$LIFECYCLE_ROOT/usr/local/bin/snell-server" ]] || fail 'uninstall left the Snell binary behind'
 [[ ! -e "$LIFECYCLE_ROOT/etc/systemd/system/snell-node.service" ]] || fail 'uninstall left the systemd unit behind'
+
+NO_IPV6_ROOT="$TEST_TMP/no-ipv6-root"
+NO_IPV6_SCRIPT="$TEST_TMP/snell-node-no-ipv6.sh"
+mkdir -p "$NO_IPV6_ROOT/etc/systemd/system" "$NO_IPV6_ROOT/usr/local/bin"
+sed \
+  -e "s|readonly DIR='/etc/snell-node'|readonly DIR='$NO_IPV6_ROOT/etc/snell-node'|" \
+  -e "s|readonly BIN='/usr/local/bin/snell-server'|readonly BIN='$NO_IPV6_ROOT/usr/local/bin/snell-server'|" \
+  -e "s|/etc/systemd/system|$NO_IPV6_ROOT/etc/systemd/system|g" \
+  "$SCRIPT" > "$NO_IPV6_SCRIPT"
+env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" IP6_OUTPUT='' CURL_OUTPUT='' \
+  SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no SYSTEMCTL_ACTIVE=yes \
+  "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
+    source "$1"
+    require_systemd_linux() { :; }
+    install_dependencies() { :; }
+    prepare_dir() { install -d -m 0750 "$DIR"; }
+    download_binary() { printf "snell-v6-binary\n" > "$BIN.new"; chmod 0755 "$BIN.new"; }
+    ask() {
+      case "$1" in
+        *"连接地址"*) printf "snell.example.com" ;;
+        *"端口"*) printf "6160" ;;
+        *"模式"*) printf "default" ;;
+        *) return 1 ;;
+      esac
+    }
+    port_free() { return 0; }
+    random_psk() { printf "no-ipv6-test-psk"; }
+    chown() { :; }
+    userdel() { :; }
+    install_node 6 >/dev/null
+    cp "$CONFIG" "$2/config-after-v6-install.conf"
+    uninstall_node <<< "y" >/dev/null
+  ' bash "$NO_IPV6_SCRIPT" "$NO_IPV6_ROOT"
+no_ipv6_config=$(cat "$NO_IPV6_ROOT/config-after-v6-install.conf")
+assert_contains "$no_ipv6_config" 'listen = 0.0.0.0:6160'
+assert_not_contains "$no_ipv6_config" '[::]:6160'
+assert_contains "$no_ipv6_config" 'psk = no-ipv6-test-psk'
+assert_contains "$no_ipv6_config" 'version = 6'
+assert_contains "$no_ipv6_config" 'mode = default'
 
 UPDATE_ROOT="$TEST_TMP/update-root"
 UPDATE_SCRIPT="$TEST_TMP/snell-node-update.sh"
@@ -520,18 +582,13 @@ MODE=default
 EOF
 printf 'snell-v5-binary\n' > "$UPDATE_ROOT/usr/local/bin/snell-server"
 : > "$SYSTEMCTL_LOG"
-env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=yes \
+env "PATH=$FAKE_BIN:$PATH" "IP4_OUTPUT=$IP4_OUTPUT" "IP6_OUTPUT=$IP6_OUTPUT" \
+  'CURL_OUTPUT=ip=2408:8210::10' SS_TCP4=yes SS_UDP4=no SS_TCP6=yes SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     require_systemd_linux() { :; }
     install_dependencies() { :; }
     download_binary() { printf "snell-v6-binary\n" > "$BIN.new"; chmod 0755 "$BIN.new"; }
-    collect_network_state() {
-      IPV4_DETECTED=yes
-      IPV6_DETECTED=yes
-      IPV6_CONNECTIVITY=yes
-      PUBLIC_IPV6=2408:8210::10
-    }
     chown() { :; }
     update_node 6
   ' bash "$UPDATE_SCRIPT"
@@ -590,7 +647,7 @@ EOF
 printf 'snell-v5-binary\n' > "$UPDATE_FAILURE_ROOT/usr/local/bin/snell-server"
 update_failure_original_config=$(cat "$UPDATE_FAILURE_ROOT/etc/snell-node/config.conf")
 set +e
-update_failure_output=$(env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=yes SS_TCP6=yes SS_UDP6=no \
+update_failure_output=$(env "PATH=$FAKE_BIN:$PATH" SS_TCP4=yes SS_UDP4=no SS_TCP6=no SS_UDP6=no \
   SYSTEMCTL_ACTIVE=yes "SYSTEMCTL_LOG=$SYSTEMCTL_LOG" SNELL_NODE_NO_MAIN=1 bash -c '
     source "$1"
     require_systemd_linux() { :; }

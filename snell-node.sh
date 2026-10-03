@@ -146,10 +146,8 @@ validate_runtime() {
   local version="$1" port="$2" listen="$3"
   service_active || return 1
   listener_present 4 tcp "$port" || return 1
-  listener_present 4 udp "$port" || return 1
   if [[ "$version" == 6 && "$listen" == *'[::]'* ]]; then
     listener_present 6 tcp "$port" || return 1
-    listener_present 6 udp "$port" || return 1
   fi
 }
 
@@ -194,6 +192,18 @@ listen_port() {
   local listen="$1" first
   first=${listen%%,*}
   printf '%s' "${first##*:}"
+}
+
+validate_configured_runtime() {
+  local config="$1" version="$2" port="$3" listen="$4"
+  local actual_version actual_listen actual_port
+  actual_version=$(config_value "$config" version)
+  actual_listen=$(config_value "$config" listen)
+  actual_port=$(listen_port "$actual_listen")
+  [[ "$actual_version" == "$version" ]] || return 1
+  [[ "$actual_listen" == "$listen" ]] || return 1
+  [[ "$actual_port" == "$port" ]] || return 1
+  validate_runtime "$version" "$port" "$listen"
 }
 
 rewrite_config_file() {
@@ -249,7 +259,7 @@ activate_runtime_change() {
   local binary_path="${7:-}" binary_backup="${8:-}" owner_group="${9:-}"
   local rollback_version rollback_listen rollback_port
   if rewrite_config_file "$config" "$version" "$listen" "$mode" "$owner_group" && \
-    systemctl restart "$UNIT" && validate_runtime "$version" "$port" "$listen"; then
+    systemctl restart "$UNIT" && validate_configured_runtime "$config" "$version" "$port" "$listen"; then
     return 0
   fi
 
@@ -273,7 +283,8 @@ activate_runtime_change() {
   rollback_listen=$(config_value "$config" listen)
   rollback_port=$(listen_port "$rollback_listen")
   if is_supported_version "$rollback_version" && valid_port "$rollback_port" && \
-    systemctl restart "$UNIT" && validate_runtime "$rollback_version" "$rollback_port" "$rollback_listen"; then
+    systemctl restart "$UNIT" && \
+    validate_configured_runtime "$config" "$rollback_version" "$rollback_port" "$rollback_listen"; then
     info '旧配置和旧服务已恢复并通过验证。'
     return 1
   fi
@@ -443,7 +454,7 @@ install_node() {
   write_config "$version" "$port" "$psk" "$mode" "$listen"
   write_service
   systemctl enable --now "$UNIT"
-  if ! validate_runtime "$version" "$port" "$listen"; then
+  if ! validate_configured_runtime "$CONFIG" "$version" "$port" "$listen"; then
     journalctl -u "$UNIT" -n 50 --no-pager || true
     die '服务或预期监听未能启动；已输出最近 50 行日志。'
   fi
