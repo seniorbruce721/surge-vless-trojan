@@ -15,6 +15,7 @@ readonly CONFIG="$DIR/config.conf"
 readonly META="$DIR/meta.env"
 readonly CONNECTIONS="$DIR/connections.txt"
 readonly PREVIOUS="$DIR/snell-server.previous"
+readonly OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
@@ -149,6 +150,17 @@ validate_runtime() {
   if [[ "$version" == 6 && "$listen" == *'[::]'* ]]; then
     listener_present 6 tcp "$port" || return 1
   fi
+}
+
+wait_for_runtime() {
+  local version="$1" port="$2" listen="$3" attempts="${4:-15}" delay="${5:-1}" attempt
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    validate_runtime "$version" "$port" "$listen" && return 0
+    if ((attempt < attempts)) && [[ "$delay" != 0 ]]; then
+      sleep "$delay"
+    fi
+  done
+  return 1
 }
 
 check_word() { if "$@"; then printf 'yes'; else printf 'no'; fi; }
@@ -300,23 +312,78 @@ require_systemd_linux() {
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "不支持的 CPU 架构：$(uname -m)；仅支持 x86_64/aarch64。" ;; esac
 }
 
+detect_package_manager() {
+  local os_id='' os_like=''
+  [[ -r "$OS_RELEASE_FILE" ]] || die "无法读取 $OS_RELEASE_FILE，无法识别 Linux 发行版。"
+  # /etc/os-release is supplied by the operating system.
+  # shellcheck disable=SC1090
+  source "$OS_RELEASE_FILE"
+  os_id=${ID:-}
+  os_like=${ID_LIKE:-}
+
+  case "$os_id" in
+    debian|ubuntu) printf 'apt' ;;
+    fedora) printf 'dnf' ;;
+    rhel|rocky|almalinux|centos|ol)
+      if command -v dnf >/dev/null 2>&1; then
+        printf 'dnf'
+      elif command -v yum >/dev/null 2>&1; then
+        printf 'yum'
+      else
+        die "检测到 $os_id，但未找到 dnf 或 yum。"
+      fi
+      ;;
+    alpine) printf 'apk' ;;
+    arch|manjaro) printf 'pacman' ;;
+    *)
+      case " $os_like " in
+        *' debian '*) printf 'apt' ;;
+        *' rhel '*|*' fedora '*)
+          if command -v dnf >/dev/null 2>&1; then
+            printf 'dnf'
+          elif command -v yum >/dev/null 2>&1; then
+            printf 'yum'
+          else
+            die "检测到 $os_id（RHEL 兼容），但未找到 dnf 或 yum。"
+          fi
+          ;;
+        *' alpine '*) printf 'apk' ;;
+        *' arch '*) printf 'pacman' ;;
+        *) die "未识别的 Linux 发行版：ID=${os_id:-未知}，ID_LIKE=${os_like:-未知}。" ;;
+      esac
+      ;;
+  esac
+}
+
 install_dependencies() {
   local missing=() command pkg_manager
   for command in curl unzip openssl ss ip; do command -v "$command" >/dev/null 2>&1 || missing+=("$command"); done
   ((${#missing[@]} == 0)) && return
-  command -v apt-get >/dev/null 2>&1 && pkg_manager=apt || \
-    command -v dnf >/dev/null 2>&1 && pkg_manager=dnf || \
-    command -v yum >/dev/null 2>&1 && pkg_manager=yum || \
-    command -v apk >/dev/null 2>&1 && pkg_manager=apk || \
-    command -v pacman >/dev/null 2>&1 && pkg_manager=pacman || \
-    die "缺少命令：${missing[*]}；未识别包管理器，请手动安装后重试。"
+  pkg_manager=$(detect_package_manager)
   info "安装依赖：${missing[*]}"
   case "$pkg_manager" in
-    apt) apt-get update; apt-get install -y --no-install-recommends curl unzip openssl iproute2 ;;
-    dnf) dnf install -y curl unzip openssl iproute ;;
-    yum) yum install -y curl unzip openssl iproute ;;
-    apk) apk add --no-cache curl unzip openssl iproute2 ;;
-    pacman) pacman -Sy --noconfirm curl unzip openssl iproute2 ;;
+    apt)
+      command -v apt-get >/dev/null 2>&1 || die '检测到 Debian/Ubuntu，但未找到 apt-get。'
+      apt-get update
+      apt-get install -y --no-install-recommends curl unzip openssl iproute2
+      ;;
+    dnf)
+      command -v dnf >/dev/null 2>&1 || die '检测到 Fedora/RHEL 系统，但未找到 dnf。'
+      dnf install -y curl unzip openssl iproute
+      ;;
+    yum)
+      command -v yum >/dev/null 2>&1 || die '检测到 RHEL 系统，但未找到 yum。'
+      yum install -y curl unzip openssl iproute
+      ;;
+    apk)
+      command -v apk >/dev/null 2>&1 || die '检测到 Alpine Linux，但未找到 apk。'
+      apk add --no-cache curl unzip openssl iproute2
+      ;;
+    pacman)
+      command -v pacman >/dev/null 2>&1 || die '检测到 Arch Linux，但未找到 pacman。'
+      pacman -Sy --noconfirm curl unzip openssl iproute2
+      ;;
+    *) die "内部错误：未知包管理器 $pkg_manager。" ;;
   esac
 }
 
@@ -419,6 +486,40 @@ EOF
   chown root:"$USER" "$META" "$CONNECTIONS"; chmod 0640 "$META" "$CONNECTIONS"
 }
 
+interactive_terminal() { [[ -t 0 && -t 1 ]]; }
+
+ensure_connection_metadata() {
+  local version host listen port psk mode
+  [[ -f "$CONFIG" ]] || die '未安装。'
+  version=$(config_value "$CONFIG" version)
+  listen=$(config_value "$CONFIG" listen)
+  port=$(listen_port "$listen")
+  psk=$(config_value "$CONFIG" psk)
+  mode=$(config_value "$CONFIG" mode)
+  mode=${mode:-default}
+  host=''
+  [[ ! -f "$META" ]] || host=$(config_value "$META" HOST)
+
+  is_supported_version "$version" || die '无法从当前配置读取有效版本。'
+  valid_port "$port" || die '无法从当前配置读取有效端口。'
+  [[ -n "$psk" ]] || die '当前配置缺少 PSK。'
+  if [[ -z "$host" ]]; then
+    interactive_terminal || die '连接元数据缺失；请在交互式终端执行 show 安全恢复。'
+    host=$(ask '未找到连接地址，请输入 Surge 使用的域名或公网 IP')
+  fi
+  valid_host "$host" || die '连接地址格式无效。'
+  write_metadata "$version" "$host" "$port" "$psk" "$mode"
+}
+
+render_connection_info() {
+  local version="$1" host="$2" port="$3" psk="$4" mode="$5"
+  printf 'Snell server version: v%s\n' "$(normalize_version "$version")"
+  printf '# 敏感信息：不要上传、截图或分享。\n'
+  printf '# 复制下面一行至 Surge 配置的 [Proxy] 段：\n'
+  surge_line "$version" "$host" "$port" "$psk" "$mode"
+  printf '\n'
+}
+
 read_metadata() {
   [[ -f "$META" ]] || die '未找到 Snell 配置元数据。'
   # shellcheck disable=SC1090
@@ -454,14 +555,18 @@ install_node() {
   write_config "$version" "$port" "$psk" "$mode" "$listen"
   write_service
   systemctl enable --now "$UNIT"
-  if ! validate_configured_runtime "$CONFIG" "$version" "$port" "$listen"; then
+  if ! wait_for_runtime "$version" "$port" "$listen"; then
     journalctl -u "$UNIT" -n 50 --no-pager || true
     die '服务或预期监听未能启动；已输出最近 50 行日志。'
   fi
   write_metadata "$version" "$host" "$port" "$psk" "$mode"
   info '完成。请在服务商安全组与 UFW 放行所选端口的 TCP 和 UDP。'
   status_report "$version" "$port" "$listen"
-  show_node
+  if interactive_terminal; then
+    show_node
+  else
+    info '连接信息已安全保存；为避免在日志中泄露 PSK，仅在交互式终端自动显示。'
+  fi
 }
 
 status_node() {
@@ -479,7 +584,8 @@ status_node() {
 
 show_node() {
   local version host listen port psk mode
-  [[ -f "$CONFIG" && -f "$META" ]] || die '未找到连接信息。'
+  interactive_terminal || die '为避免泄露 PSK，show 仅允许在交互式终端输出。'
+  ensure_connection_metadata
   version=$(config_value "$CONFIG" version)
   listen=$(config_value "$CONFIG" listen)
   port=$(listen_port "$listen")
@@ -490,10 +596,7 @@ show_node() {
   is_supported_version "$version" || die '无法从当前配置读取有效版本。'
   valid_port "$port" || die '无法从当前配置读取有效端口。'
   [[ -n "$psk" && -n "$host" ]] || die '当前配置缺少 PSK 或 Surge 连接地址。'
-  printf '# 敏感文件：不要上传、截图或分享。\n'
-  printf '# 复制下面一行至 Surge 配置的 [Proxy] 段：\n'
-  surge_line "$version" "$host" "$port" "$psk" "$mode"
-  printf '\n'
+  render_connection_info "$version" "$host" "$port" "$psk" "$mode"
 }
 
 update_node() {

@@ -64,7 +64,7 @@ sudo ufw allow 80/tcp
 ## Snell 支持范围
 
 - 仅 Linux + systemd；CPU 仅 `x86_64`、`aarch64`。
-- 自动识别 `apt`、`dnf`、`yum`、`apk`、`pacman` 安装依赖；这意味着不再把系统版本硬编码为 Ubuntu 24.04 / Debian 12，但不等于承诺所有发行版都能运行。
+- 先通过 `/etc/os-release` 识别发行版，再使用 `apt`、`dnf`、`yum`、`apk` 或 `pacman` 安装 `curl`、`unzip`、`openssl` 和 `iproute2/iproute` 等依赖。Debian 13 会明确使用 `apt`，未识别系统会停止并报错，不会猜测包管理器。
 - 只下载官方 `dl.nssurge.com` 的当前可用版本：Snell v4.1.1、v5.0.1（默认推荐）、v6.0.0rc2 Beta。
 - v1-v3 不自动安装：当前官方地址不提供可验证的安装包，脚本不会改用未知第三方镜像。
 - v6 是 Beta；使用前确认 Surge 客户端版本支持 Snell v6。仅提供 `default` 和 `unshaped`，不提供风险更高的 `unsafe-raw`。
@@ -87,7 +87,7 @@ IPv4 / IPv6 有两层独立策略，不要混为一件事：
 
 1. 不修改 SSH、UFW、云安全组、sysctl、BBR、时区。
 2. 下载限定 HTTPS，并校验 zip 完整性和二进制能否执行；下载失败时停止，不切换第三方来源。
-3. 自动随机生成 PSK；连接信息只写入服务器的 `/etc/snell-node/connections.txt`（权限 `640`），不会上传到 GitHub。
+3. 自动随机生成 PSK；连接信息写入服务器的 `/etc/snell-node/meta.env` 和 `/etc/snell-node/connections.txt`（权限 `640`），不会上传到 GitHub，也不会在非交互式输出中显示。
 4. `update` 与 `repair-dualstack` 在修改前生成 `config.conf.bak-UTC时间戳-PID`；新服务或预期监听验证失败时，自动恢复旧配置、旧二进制并重启旧服务。
 5. `uninstall` 仅删除本脚本创建的服务、程序与 `/etc/snell-node`，不碰防火墙规则。
 
@@ -107,7 +107,7 @@ sudo bash snell-node.sh install
 sudo bash snell-node.sh install 6
 ```
 
-安装时依次填写：Snell 大版本、给 Surge 使用的域名或公网 IP、端口；v6 还会询问模式。成功后会直接打印一行可复制到 Surge 配置 `[Proxy]` 段的内容。
+安装时依次填写：Snell 大版本、给 Surge 使用的域名或公网 IP、端口；v6 还会询问模式。脚本会在 systemd 启动后等待服务与 TCP 监听就绪；成功后会在交互式终端直接打印完整的 Surge `[Proxy]` 配置。
 
 常用命令：
 
@@ -120,7 +120,7 @@ sudo bash snell-node.sh repair-dualstack
 sudo bash snell-node.sh uninstall
 ```
 
-`show` 会从当前 `config.conf` 实时生成 Surge 节点并显示 PSK，避免截图、发送到聊天软件或提交到 GitHub。Surge 的 Snell 版本必须与服务端安装版本一致；v6 的 `mode` 也必须一致：服务端 `mode = default` 对应 Surge `version=6, mode=default`，服务端 `mode = unshaped` 对应 Surge `version=6, mode=unshaped`。v6 的客户端兼容性请以 [Surge 官方 Snell 文档](https://manual.nssurge.com/policies/snell.html) 为准。
+`show` 会从当前 `config.conf` 实时生成 Surge 节点并显示 PSK，只允许在交互式终端输出。如果旧安装只剩 `config.conf` 而连接元数据缺失，`show` 会询问域名或公网 IP，再从原配置恢复连接文件，不会改写原 PSK 和端口。避免截图、发送到聊天软件或提交到 GitHub。Surge 的 Snell 版本必须与服务端安装版本一致；v6 的 `mode` 也必须一致：服务端 `mode = default` 对应 Surge `version=6, mode=default`，服务端 `mode = unshaped` 对应 Surge `version=6, mode=unshaped`。v6 的客户端兼容性请以 [Surge 官方 Snell 文档](https://manual.nssurge.com/policies/snell.html) 为准。
 
 现有 v6 节点使用 `repair-dualstack` 只修正 `listen` 并清理 deprecated `ipv6` 行，保留 PSK、端口、模式、显式设置的 `dns-ip-preference` 和 systemd 服务。现有 v5 节点若需要 IPv6 入站，必须明确执行 `update 6`；该操作保留 PSK 和端口，清理可能影响 RC2 的旧 `ipv6` 行，但必须同步将 Surge 节点改为 `version=6` 并配置匹配的 `mode`。
 

@@ -612,6 +612,8 @@ assert_contains "$updated_connections" 'snell.example.com, 6160'
 assert_contains "$updated_connections" 'psk=update-test-psk'
 dynamic_show_output=$(env "PATH=$FAKE_BIN:$PATH" SNELL_NODE_NO_MAIN=1 bash -c '
   source "$1"
+  interactive_terminal() { return 0; }
+  chown() { :; }
   rewrite_config_file "$CONFIG" 6 "0.0.0.0:6160,[::]:6160" unshaped ""
   show_node
 ' bash "$UPDATE_SCRIPT")
