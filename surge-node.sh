@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Personal VLESS Reality + Trojan node for Debian 12 / Ubuntu 24.04.
+# Personal VLESS Reality + Trojan node for Debian 12/13 / Ubuntu 24.04.
 # Intentionally no self-update, Docker, WARP, tunnel, panel or firewall mutation.
 
 set -Eeuo pipefail
@@ -22,7 +22,8 @@ root() { [[ $EUID -eq 0 ]] || die '请用 root 或 sudo 运行。'; }
 usage() {
   cat <<'EOF'
 用法：surge-node.sh <命令>
-  install          安装并申请 Trojan TLS 证书
+  install          安装 VLESS Reality + Trojan TLS
+  install trojan   仅安装 Trojan TLS
   status           验证配置，显示服务与监听端口
   show             显示连接信息（包含敏感凭据）
   update           手动校验并更新 Xray
@@ -32,9 +33,17 @@ EOF
 }
 
 check_os() {
-  . /etc/os-release
-  case "${ID}:${VERSION_ID}" in debian:12|ubuntu:24.04) ;; *) die "仅支持 Debian 12 / Ubuntu 24.04；当前：${PRETTY_NAME:-未知}" ;; esac
+  # OS_RELEASE_FILE is only overridden by the local regression tests.
+  . "${OS_RELEASE_FILE:-/etc/os-release}"
+  case "${ID}:${VERSION_ID}" in debian:12|debian:13|ubuntu:24.04) ;; *) die "仅支持 Debian 12 / 13 和 Ubuntu 24.04；当前：${PRETTY_NAME:-未知}" ;; esac
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "不支持的架构：$(uname -m)" ;; esac
+}
+
+ensure_install_target_free() {
+  [[ ! -e "$DIR" && ! -L "$DIR" ]] || die "配置目录已存在：${DIR}；为避免覆盖已有配置，已停止安装。"
+  [[ ! -e "/etc/systemd/system/$UNIT.service" && ! -L "/etc/systemd/system/$UNIT.service" ]] \
+    || die "systemd 服务已存在：$UNIT.service；已停止安装。"
+  [[ ! -e "$BIN" && ! -L "$BIN" ]] || die "Xray 路径已存在：${BIN}；已停止安装。"
 }
 
 deps() {
@@ -127,10 +136,25 @@ EOF
   chown root:"$USER" "$CONFIG"; chmod 0640 "$CONFIG"
 }
 
+write_trojan_config() {
+  local tp="$1" pass="$2"
+  cat > "$CONFIG" <<EOF
+{
+  "log":{"loglevel":"warning"},
+  "inbounds":[
+    {"tag":"trojan-tls","listen":"::","port":$tp,"protocol":"trojan","settings":{"clients":[{"password":"$pass"}]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":"$TLS/fullchain.pem","keyFile":"$TLS/privkey.pem"}]}}}
+  ],
+  "outbounds":[{"protocol":"freedom","tag":"direct"},{"protocol":"blackhole","tag":"block"}]
+}
+EOF
+  chown root:"$USER" "$CONFIG"; chmod 0640 "$CONFIG"
+}
+
 write_unit() {
+  local description="${1:-Personal VLESS Reality and Trojan node}"
   cat > "/etc/systemd/system/$UNIT.service" <<EOF
 [Unit]
-Description=Personal VLESS Reality and Trojan node
+Description=$description
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -167,9 +191,19 @@ EOF
   chown root:"$USER" "$CONNECTIONS"; chmod 0640 "$CONNECTIONS"
 }
 
+write_trojan_connections() {
+  local tp="$1" domain="$2" pass="$3"
+  cat > "$CONNECTIONS" <<EOF
+# 敏感文件：不要上传、截图或分享。
+# Surge [Proxy] 中使用的 Trojan 节点：
+Personal-Trojan = trojan, $domain, $tp, password=$pass, sni=$domain
+EOF
+  chown root:"$USER" "$CONNECTIONS"; chmod 0640 "$CONNECTIONS"
+}
+
 install_node() {
   local domain email rp tp sni uuid pair private public sid pass
-  check_os; deps; install_xray; prepare_dir
+  check_os; ensure_install_target_free; deps; install_xray; prepare_dir
   domain=$(ask 'Trojan 域名（须已解析到本机公网 IP）'); valid_domain "$domain" || die '域名格式无效。'
   email=$(ask '证书通知邮箱'); [[ "$email" == *@*.* ]] || die '邮箱格式无效。'
   rp=$(ask 'VLESS Reality TCP 端口' 443); tp=$(ask 'Trojan TCP 端口' 8443); sni=$(ask 'Reality 目标 SNI' www.microsoft.com)
@@ -191,7 +225,34 @@ install_node() {
   show_node
 }
 
-status_node() { [[ -f "$CONFIG" ]] || die '未安装。'; "$BIN" run -test -config "$CONFIG"; systemctl --no-pager --full status "$UNIT" || true; ss -lntp | grep -E ':(443|8443)[[:space:]]' || true; }
+install_trojan_node() {
+  local domain email tp pass
+  check_os; ensure_install_target_free; deps; install_xray; prepare_dir
+  domain=$(ask 'Trojan 域名（须已解析到本机公网 IP）'); valid_domain "$domain" || die '域名格式无效。'
+  email=$(ask '证书通知邮箱'); [[ "$email" == *@*.* ]] || die '邮箱格式无效。'
+  tp=$(ask 'Trojan TCP 端口' 443); valid_port "$tp" || die '端口无效。'
+  port_free "$tp" || die "端口 $tp 已被占用。"
+  issue_cert "$domain" "$email"
+  pass=$(password)
+  write_trojan_config "$tp" "$pass"
+  "$BIN" run -test -config "$CONFIG"
+  write_unit 'Personal Trojan TLS node'; systemctl enable --now "$UNIT"
+  write_trojan_connections "$tp" "$domain" "$pass"
+  info "完成。请自行在服务商安全组和防火墙放行 TCP ${tp}；Certbot 续期需要 TCP 80。"
+  show_node
+}
+
+status_node() {
+  local port sockets
+  [[ -f "$CONFIG" ]] || die '未安装。'
+  "$BIN" run -test -config "$CONFIG"
+  systemctl --no-pager --full status "$UNIT" || true
+  sockets=$(ss -lntp)
+  while IFS= read -r port; do
+    valid_port "$port" || continue
+    grep -E "[:.]${port}[[:space:]]" <<<"$sockets" || true
+  done < <(jq -r '.inbounds[]?.port // empty' "$CONFIG")
+}
 show_node() { [[ -f "$CONNECTIONS" ]] || die '未找到连接信息。'; cat "$CONNECTIONS"; }
 update_node() { [[ -f "$CONFIG" ]] || die '未安装。'; install_xray; "$BIN" run -test -config "$CONFIG"; systemctl restart "$UNIT"; info 'Xray 已更新。'; }
 
@@ -219,9 +280,16 @@ main() {
   esac
   root
   case "${1:-}" in
-    install) install_node ;; status) status_node ;; show) show_node ;; update) update_node ;;
+    install)
+      case "${2:-}" in
+        '') install_node ;;
+        trojan) install_trojan_node ;;
+        *) die "未知安装模式：$2" ;;
+      esac
+      ;;
+    status) status_node ;; show) show_node ;; update) update_node ;;
     backup) backup_node "${2:-}" ;; uninstall) uninstall_node ;; -h|--help|help|'') usage ;;
     *) die "未知命令：$1" ;;
   esac
 }
-main "$@"
+[[ "${SURGE_NODE_NO_MAIN:-0}" == 1 ]] || main "$@"
