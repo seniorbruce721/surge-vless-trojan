@@ -9,7 +9,7 @@
 
 ## 支持范围
 
-- Debian 12、Ubuntu 24.04 LTS
+- Debian 12 / 13、Ubuntu 24.04 LTS
 - x86_64、aarch64
 - Trojan 需要一个已解析到本机公网 IP 的域名
 
@@ -25,12 +25,15 @@
 - 先创建 VPS 快照。
 - 确认 TCP 80 可以从公网访问：Certbot standalone 需要它申请和续期 Trojan 的证书。
 - 若 Nginx、Caddy 或 Apache 已占用 TCP 80，本脚本会停止，避免干扰现有网站。
-- 默认端口：VLESS Reality TCP 443，Trojan TCP 8443。
+- 双协议模式默认端口：VLESS Reality TCP 443，Trojan TCP 8443。
+- Trojan-only 模式默认使用 TCP 443，安装时可自定义端口。
+- 为避免覆盖已有服务，如果 `/etc/surge-node`、`surge-node.service` 或 `/usr/local/bin/xray` 已存在，安装会直接停止。
 
 ## 使用
 
 ```bash
 sudo bash surge-node.sh install
+sudo bash surge-node.sh install trojan
 sudo bash surge-node.sh status
 sudo bash surge-node.sh show
 sudo bash surge-node.sh update
@@ -38,7 +41,9 @@ sudo bash surge-node.sh backup /root
 sudo bash surge-node.sh uninstall
 ```
 
-安装完成后会输出 VLESS Reality URI，以及可直接放入 Surge `[Proxy]` 段的 Trojan 配置行。
+`install` 保持原有 VLESS Reality + Trojan TLS 双协议安装；`install trojan` 只安装 Xray Trojan TLS，安装时会询问域名和端口。安装完成后会直接输出可放入 Surge `[Proxy]` 段的 Trojan 配置行。
+
+`status`、`show`、`update`、`backup` 和 `uninstall` 同时适用于双协议与 Trojan-only 安装。脚本不会修改 Snell、SSH、BBR 或防火墙。
 
 若使用 UFW，除服务商安全组外还要手动按实际端口放行：
 
