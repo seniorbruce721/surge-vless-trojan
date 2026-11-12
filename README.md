@@ -1,3 +1,60 @@
+# 独立 VLESS + REALITY + Vision 节点
+
+`vless-node.sh` 是独立的个人 VPS 安装器，只管理以下资源：
+
+- 服务：`vless-node.service`
+- 账户：`vless-node`
+- 配置：`/etc/vless-node`
+- 独立 Xray：`/usr/local/lib/vless-node/xray`
+
+它不会修改现有的 Snell、Trojan、SSH、BBR、sysctl、防火墙或完整 Surge 配置文件，也不会复用或覆盖 `/usr/local/bin/xray`。
+
+## VLESS 支持范围
+
+- Debian 12 / 13、Ubuntu 22.04 / 24.04 LTS
+- `x86_64`、`aarch64`
+- IPv4-only、IPv6-only、IPv4/IPv6 双栈
+- Surge iOS 6.0+、Surge Mac 6.12+
+
+脚本从 XTLS/Xray-core 官方最新稳定 Release 下载 Xray，并要求 GitHub Release 提供匹配安装包的 SHA-256 digest；缺少 digest 或校验失败时拒绝安装。双栈监听通过临时 Xray 和 IPv4/IPv6 本地连接分别验证，不假定监听 `::` 必然兼容 IPv4。
+
+## VLESS 安装
+
+在全新 VPS 上执行一条命令：
+
+```bash
+git clone https://github.com/seniorbruce721/surge-vless-trojan.git && cd surge-vless-trojan && sudo bash vless-node.sh install
+```
+
+安装时依次填写：
+
+1. 监听端口，默认 `443`；
+2. 你自己确认可用的 REALITY 目标 SNI，不提供未经验证的固定默认值；
+3. 可选连接域名，必须解析到脚本检测出的本机公网 IPv4 或 IPv6。
+
+安装成功后，交互式终端会直接显示服务器地址、端口、UUID、SNI、REALITY Public Key、Short ID，以及可直接放入 Surge `[Proxy]` 或 `Proxy.dconf` 的节点配置行。IPv4、IPv6 和域名形式只按实际检测与监听验证结果生成；脚本不会创建或修改完整 Surge 配置文件。
+
+常用命令：
+
+```bash
+sudo bash vless-node.sh status
+sudo bash vless-node.sh show
+sudo bash vless-node.sh update
+sudo bash vless-node.sh uninstall
+```
+
+`show` 与安装成功后的输出共用同一套生成逻辑。`update` 只更换本脚本的独立 Xray，保留 UUID、REALITY 密钥、Short ID、端口、SNI、连接地址和监听模式；启动验证失败会恢复旧二进制。`uninstall` 只删除本脚本管理的资源。
+
+脚本只读取防火墙状态，不自动添加、删除或重置规则。你仍需自行在 VPS 服务商安全组和本机防火墙中放行所选 TCP 端口。服务在本机 `active` 且端口可连接，不等于公网入站一定可用，必须用 Surge 实测。
+
+完整节点信息包含敏感凭据，仅允许在交互式安装结尾或 `show` 中显示。服务器上的 `config.json`、`meta.env`、`connections.txt` 使用受限权限；不要截图、上传或提交到 GitHub。
+
+> 验证边界：当前版本已完成 Bash 语法、配置生成、IPv4/IPv6 fixture、安装隔离、更新回滚和卸载测试；尚未在真实 Debian/Ubuntu VPS 或真实 Surge 客户端上验证。
+
+Surge VLESS 参数以 [Surge 官方文档](https://manual.nssurge.com/policies/vless.html) 为准；REALITY 目标选择与配置以 [Project X 官方文档](https://xtls.github.io/en/config/transports/reality.html) 为准。
+
+---
+
 # Surge VLESS + Trojan Node
 
 个人使用的精简 Xray 部署脚本，目标是：
