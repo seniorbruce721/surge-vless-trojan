@@ -14,6 +14,20 @@ assert_not_contains() { [[ "$1" != *"$2"* ]] || fail "expected output not to con
 TEST_TMP=$(mktemp -d)
 trap 'rm -rf "$TEST_TMP"' EXIT
 
+protected_paths=$(env \
+  VLESS_NODE_NO_MAIN=1 \
+  VLESS_NODE_TEST_MODE=0 \
+  VLESS_NODE_DIR=/etc/snell-node \
+  VLESS_NODE_BIN_DIR=/usr/local/bin \
+  VLESS_NODE_UNIT_DIR=/etc/systemd/system/snell-node.service.d \
+  /bin/bash -c '
+    source "$1"
+    printf "%s|%s|%s" "$DIR" "$BIN_DIR" "$UNIT_FILE"
+  ' bash "$SCRIPT")
+assert_eq "$protected_paths" '/etc/vless-node|/usr/local/lib/vless-node|/etc/systemd/system/vless-node.service'
+
+export VLESS_NODE_TEST_MODE=1
+
 write_os_release() {
   local file="$1" id="$2" version="$3" pretty="$4"
   cat > "$file" <<EOF
@@ -198,6 +212,25 @@ if no_digest_output=$(VLESS_NODE_NO_MAIN=1 /bin/bash -c '
   fail 'release asset without an official SHA-256 digest was accepted'
 fi
 
+PORT_CHECK_BIN="$TEST_TMP/port-check-bin"
+mkdir -p "$PORT_CHECK_BIN"
+cat > "$PORT_CHECK_BIN/ss" <<'EOF'
+#!/usr/bin/env bash
+printf 'simulated ss failure\n' >&2
+exit 1
+EOF
+chmod +x "$PORT_CHECK_BIN/ss"
+if port_probe_output=$(env \
+  PATH="$PORT_CHECK_BIN:/usr/bin:/bin" \
+  VLESS_NODE_NO_MAIN=1 \
+  /bin/bash -c '
+    source "$1"
+    port_is_free 24443
+  ' bash "$SCRIPT" 2>&1); then
+  fail 'port check accepted the port when ss failed'
+fi
+assert_contains "$port_probe_output" '无法检查 TCP 端口 24443 是否被占用'
+
 INSTALL_ROOT="$TEST_TMP/install-root"
 INSTALL_BIN="$TEST_TMP/install-bin"
 INSTALL_LOG="$TEST_TMP/install-calls.log"
@@ -238,6 +271,63 @@ printf 'ufw:%s\n' "$*" >> "$INSTALL_LOG"
 printf 'Status: inactive\n'
 EOF
 chmod +x "$INSTALL_BIN"/*
+
+RACE_ROOT="$TEST_TMP/port-race-root"
+RACE_MARKER="$TEST_TMP/port-race-user-created"
+mkdir -p "$RACE_ROOT/etc/systemd/system" "$RACE_ROOT/usr/local/lib"
+if port_race_output=$(env \
+  PATH="$INSTALL_BIN:/usr/bin:/bin" \
+  INSTALL_LOG="$INSTALL_LOG" \
+  RACE_MARKER="$RACE_MARKER" \
+  VLESS_NODE_DIR="$RACE_ROOT/etc/vless-node" \
+  VLESS_NODE_BIN_DIR="$RACE_ROOT/usr/local/lib/vless-node" \
+  VLESS_NODE_UNIT_DIR="$RACE_ROOT/etc/systemd/system" \
+  VLESS_NODE_NO_MAIN=1 \
+  /bin/bash -c '
+    source "$1"
+    require_supported_host() { :; }
+    install_dependencies() { :; }
+    interactive_terminal() { return 0; }
+    collect_network_state() {
+      IPV4_PUBLIC=yes; IPV6_PUBLIC=no
+      PUBLIC_IPV4=203.0.113.23; PUBLIC_IPV6=""
+      IPV4_REASON=ok; IPV6_REASON=unavailable
+    }
+    ask() {
+      case "$1" in
+        *"端口"*) printf "24443" ;;
+        *"SNI"*) printf "reality.example.com" ;;
+        *"连接域名"*) printf "" ;;
+      esac
+    }
+    download_xray_to() {
+      cat > "$1" <<"XRAY"
+#!/usr/bin/env bash
+case "$1" in
+  uuid) printf "2cae91b3-f85c-433b-88ee-a002b9ed6d61\n" ;;
+  x25519) printf "Private key: server-private-key\nPublic key: server-public-key\n" ;;
+  *) exit 0 ;;
+esac
+XRAY
+      chmod +x "$1"
+    }
+    PORT_CHECK_COUNT=0
+    port_is_free() {
+      PORT_CHECK_COUNT=$((PORT_CHECK_COUNT + 1))
+      [[ "$PORT_CHECK_COUNT" -eq 1 ]]
+    }
+    probe_candidate_mode() { [[ "$1" == ipv4 ]]; }
+    ensure_service_user() { : > "$RACE_MARKER"; }
+    chown() { :; }
+    install_node
+  ' bash "$SCRIPT" 2>&1); then
+  fail 'install continued after the selected port was taken before commit'
+fi
+assert_contains "$port_race_output" 'TCP 端口 24443 已被占用'
+[[ ! -e "$RACE_MARKER" ]] || fail 'port race was detected after service-user creation'
+[[ ! -e "$RACE_ROOT/etc/vless-node" ]] || fail 'port race left a VLESS config directory'
+[[ ! -e "$RACE_ROOT/usr/local/lib/vless-node" ]] || fail 'port race left a VLESS binary directory'
+[[ ! -e "$RACE_ROOT/etc/systemd/system/vless-node.service" ]] || fail 'port race left a VLESS unit'
 
 install_output=$(env \
   PATH="$INSTALL_BIN:/usr/bin:/bin" \
@@ -305,6 +395,12 @@ assert_eq "$(cat "$INSTALL_ROOT/etc/snell-node/sentinel")" 'snell-preserved'
 assert_eq "$(cat "$INSTALL_ROOT/etc/surge-node/sentinel")" 'trojan-preserved'
 assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:allow'
 assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:delete'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:reset'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:disable'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:enable'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:stop snell'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:restart snell'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:disable snell'
 
 show_output=$(env \
   VLESS_NODE_DIR="$INSTALL_ROOT/etc/vless-node" \
@@ -400,6 +496,7 @@ EOF
 chmod +x "$INSTALL_ROOT/usr/local/lib/vless-node/xray"
 
 if update_output=$(env \
+  INSTALL_LOG="$INSTALL_LOG" \
   VLESS_NODE_DIR="$INSTALL_ROOT/etc/vless-node" \
   VLESS_NODE_BIN_DIR="$INSTALL_ROOT/usr/local/lib/vless-node" \
   VLESS_NODE_UNIT_DIR="$INSTALL_ROOT/etc/systemd/system" \
@@ -416,7 +513,13 @@ exit 0
 XRAY
       chmod +x "$1"
     }
-    systemctl() { :; }
+    systemctl() {
+      {
+        printf "update-systemctl:"
+        printf " %s" "$@"
+        printf "\n"
+      } >> "$INSTALL_LOG"
+    }
     attempt=0
     wait_for_runtime() { attempt=$((attempt + 1)); ((attempt >= 2)); }
     update_node
@@ -427,6 +530,8 @@ assert_contains "$update_output" '已恢复旧 Xray 和旧服务'
 assert_contains "$(cat "$INSTALL_ROOT/usr/local/lib/vless-node/xray")" 'old-xray'
 assert_eq "$(shasum -a 256 "$INSTALL_ROOT/etc/vless-node/config.json" | awk '{print $1}')" "$config_before"
 assert_eq "$(shasum -a 256 "$INSTALL_ROOT/etc/vless-node/meta.env" | awk '{print $1}')" "$meta_before"
+assert_contains "$(cat "$INSTALL_LOG")" 'update-systemctl: restart vless-node'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'update-systemctl: restart snell'
 
 printf 'y\n' | env \
   PATH="$INSTALL_BIN:/usr/bin:/bin" \
@@ -446,6 +551,12 @@ printf 'y\n' | env \
 [[ ! -e "$INSTALL_ROOT/etc/systemd/system/vless-node.service" ]] || fail 'uninstall left its systemd unit'
 assert_eq "$(cat "$INSTALL_ROOT/etc/snell-node/sentinel")" 'snell-preserved'
 assert_eq "$(cat "$INSTALL_ROOT/etc/surge-node/sentinel")" 'trojan-preserved'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:stop snell'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:restart snell'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'systemctl:disable snell'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:reset'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:disable'
+assert_not_contains "$(cat "$INSTALL_LOG")" 'ufw:enable'
 
 UNRELATED_ROOT="$TEST_TMP/unrelated-root"
 mkdir -p "$UNRELATED_ROOT/etc/vless-node" "$UNRELATED_ROOT/etc/systemd/system" "$UNRELATED_ROOT/usr/local/lib/vless-node"

@@ -7,12 +7,18 @@ IFS=$'\n\t'
 umask 077
 
 readonly APP='vless-node'
-readonly DIR="${VLESS_NODE_DIR:-/etc/vless-node}"
-readonly BIN_DIR="${VLESS_NODE_BIN_DIR:-/usr/local/lib/vless-node}"
-readonly BIN="$BIN_DIR/xray"
 readonly UNIT='vless-node'
 readonly USER='vless-node'
-readonly UNIT_DIR="${VLESS_NODE_UNIT_DIR:-/etc/systemd/system}"
+if [[ "${VLESS_NODE_NO_MAIN:-0}" == 1 && "${VLESS_NODE_TEST_MODE:-0}" == 1 ]]; then
+  readonly DIR="${VLESS_NODE_DIR:-/etc/vless-node}"
+  readonly BIN_DIR="${VLESS_NODE_BIN_DIR:-/usr/local/lib/vless-node}"
+  readonly UNIT_DIR="${VLESS_NODE_UNIT_DIR:-/etc/systemd/system}"
+else
+  readonly DIR='/etc/vless-node'
+  readonly BIN_DIR='/usr/local/lib/vless-node'
+  readonly UNIT_DIR='/etc/systemd/system'
+fi
+readonly BIN="$BIN_DIR/xray"
 readonly UNIT_FILE="$UNIT_DIR/$UNIT.service"
 readonly CONFIG="$DIR/config.json"
 readonly META="$DIR/meta.env"
@@ -206,8 +212,11 @@ collect_network_state() {
 }
 
 port_is_free() {
-  local port="$1"
-  ! ss -H -ltn 2>/dev/null | awk -v p=":$port" '$4 ~ p "$" {found=1} END {exit !found}'
+  local port="$1" listeners
+  if ! listeners=$(ss -H -ltn 2>&1); then
+    die "无法检查 TCP 端口 $port 是否被占用；ss 执行失败：${listeners:-未知错误}"
+  fi
+  ! awk -v p=":$port" '$4 ~ p "$" {found=1} END {exit !found}' <<<"$listeners"
 }
 
 validate_sni_target() {
@@ -446,6 +455,7 @@ install_node() {
       DOMAIN=''
     fi
   fi
+  port_is_free "$PORT" || { rm -rf "$tmp"; die "TCP 端口 $PORT 已被占用，安装已停止。"; }
   ensure_service_user
   INSTALL_RESOURCES_CREATED=yes
   mkdir -p "$DIR" "$BIN_DIR" "$UNIT_DIR"
