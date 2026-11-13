@@ -54,8 +54,8 @@ require_supported_host() {
   source "$OS_RELEASE_FILE"
   os_id=${ID:-}; version=${VERSION_ID:-}; pretty=${PRETTY_NAME:-未知}
   case "$os_id:$version" in
-    debian:12|debian:13|ubuntu:22.04|ubuntu:24.04) ;;
-    *) die "仅支持 Debian 12/13 和 Ubuntu 22.04/24.04；当前：$pretty" ;;
+    debian:12|debian:13|ubuntu:22.04|ubuntu:24.04|ubuntu:26.04) ;;
+    *) die "仅支持 Debian 12/13 和 Ubuntu 22.04/24.04/26.04；当前：$pretty" ;;
   esac
 }
 

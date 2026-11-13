@@ -11,7 +11,7 @@
 
 ## VLESS 支持范围
 
-- Debian 12 / 13、Ubuntu 22.04 / 24.04 LTS
+- Debian 12 / 13、Ubuntu 22.04 / 24.04 / 26.04 LTS
 - `x86_64`、`aarch64`
 - IPv4-only、IPv6-only、IPv4/IPv6 双栈
 - Surge iOS 6.0+、Surge Mac 6.12+

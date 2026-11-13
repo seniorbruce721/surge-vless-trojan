@@ -41,9 +41,10 @@ write_os_release "$TEST_TMP/debian-12" debian 12 'Debian GNU/Linux 12'
 write_os_release "$TEST_TMP/debian-13" debian 13 'Debian GNU/Linux 13'
 write_os_release "$TEST_TMP/ubuntu-2204" ubuntu 22.04 'Ubuntu 22.04 LTS'
 write_os_release "$TEST_TMP/ubuntu-2404" ubuntu 24.04 'Ubuntu 24.04 LTS'
+write_os_release "$TEST_TMP/ubuntu-2604" ubuntu 26.04 'Ubuntu 26.04 LTS'
 write_os_release "$TEST_TMP/fedora-43" fedora 43 'Fedora Linux 43'
 
-for fixture in debian-12 debian-13 ubuntu-2204 ubuntu-2404; do
+for fixture in debian-12 debian-13 ubuntu-2204 ubuntu-2404 ubuntu-2604; do
   OS_RELEASE_FILE="$TEST_TMP/$fixture" VLESS_NODE_NO_MAIN=1 /bin/bash -c '
     source "$1"
     uname() { case "$1" in -s) printf "Linux\n" ;; -m) printf "x86_64\n" ;; esac; }
@@ -60,7 +61,7 @@ if unsupported_output=$(OS_RELEASE_FILE="$TEST_TMP/fedora-43" VLESS_NODE_NO_MAIN
 ' bash "$SCRIPT" 2>&1); then
   fail 'unsupported Fedora host was accepted'
 fi
-assert_contains "$unsupported_output" '仅支持 Debian 12/13 和 Ubuntu 22.04/24.04'
+assert_contains "$unsupported_output" '仅支持 Debian 12/13 和 Ubuntu 22.04/24.04/26.04'
 
 mode_for() {
   VLESS_NODE_NO_MAIN=1 /bin/bash -c '
