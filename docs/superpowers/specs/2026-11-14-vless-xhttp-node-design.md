@@ -4,7 +4,7 @@
 
 新增 `vless-xhttp-node.sh`，在不修改现有 `snell-node.sh`、`vless-node.sh`、`surge-node.sh` 及其服务的前提下，部署两个可独立存在的测试实例：
 
-- `plain`：VLESS + XHTTP + REALITY，固定 `stream-one`；
+- `plain`：VLESS + XHTTP + REALITY，服务端省略 `mode`，采用 Xray 默认 `auto`；
 - `encryption`：上述组合再启用由 Xray 官方 `vlessenc` 生成的 `mlkem768x25519plus` VLESS Encryption。
 
 脚本只支持 Debian 12/13、Ubuntu 24.04/26.04，使用 systemd，支持 `install`、`show`、`status`、`uninstall`。
@@ -12,7 +12,7 @@
 ## 官方协议依据
 
 - Xray 官方示例使用 `streamSettings.network = "xhttp"`、`xhttpSettings.path` 和 `security = "reality"`。
-- 本脚本显式写入 `xhttpSettings.mode = "stream-one"`，并要求 REALITY 目标支持 TLS 1.3 与 HTTP/2。
+- 本脚本不在服务端固定 `xhttpSettings.mode`，由 Xray 默认 `auto` 接受客户端选择；客户端初始建议 `stream-one`。REALITY 目标必须支持 TLS 1.3 与 HTTP/2。
 - 普通模式入站 `decryption = "none"`。
 - Encryption 模式的服务端 `decryption` 与客户端 `encryption` 只能来自当前下载的 Xray 执行 `xray vlessenc` 的结果，脚本不拼接或猜测格式。
 
