@@ -2,7 +2,7 @@
 
 `vless-xhttp-node.sh` 用于在不动现有 Snell、VLESS + REALITY + Vision 和 Trojan 的前提下，分别测试：
 
-- `plain`：VLESS + XHTTP + REALITY，`stream-one`，优先 HTTP/2；
+- `plain`：VLESS + XHTTP + REALITY，服务端使用默认 `auto`，客户端初始建议 `stream-one`，优先 HTTP/2；
 - `encryption`：上述组合再启用 Xray 官方 `vlessenc` 生成的 `mlkem768x25519plus` VLESS Encryption。
 
 两种模式使用独立的 systemd 服务、账户、配置目录、Xray 二进制和端口，可以同时安装：
@@ -13,7 +13,7 @@ sudo bash vless-xhttp-node.sh install plain
 sudo bash vless-xhttp-node.sh install encryption
 ```
 
-默认端口分别是 TCP 24443 和 24444，安装时可以修改。端口已占用或无法可靠检查时会立即停止，不覆盖现有监听。脚本支持 Debian 12/13、Ubuntu 24.04/26.04，以及 IPv4-only、IPv6-only、双栈；双栈模式通过实际本地连接测试决定使用单监听还是双监听，不修改系统网络设置。
+默认端口分别是 TCP 24443 和 24444，安装时可以修改。服务端不固定 XHTTP `mode`，采用 Xray 的默认 `auto` 语义，允许兼容客户端选择 `stream-one`、`stream-up` 或 `packet-up`。端口已占用或无法可靠检查时会立即停止，不覆盖现有监听。脚本支持 Debian 12/13、Ubuntu 24.04/26.04，以及 IPv4-only、IPv6-only、双栈；双栈模式通过实际本地连接测试决定使用单监听还是双监听，不修改系统网络设置。
 
 常用命令：
 

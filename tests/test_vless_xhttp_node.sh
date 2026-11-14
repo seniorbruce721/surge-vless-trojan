@@ -95,13 +95,17 @@ for profile in ("plain", "encryption"):
     assert [item["listen"] for item in config["inbounds"]] == ["0.0.0.0", "::"]
     for inbound in config["inbounds"]:
         assert inbound["protocol"] == "vless"
+        assert inbound["port"] == 24443
         assert inbound["settings"]["clients"] == [{"id": "test-uuid", "flow": ""}]
         stream = inbound["streamSettings"]
         assert stream["network"] == "xhttp"
-        assert stream["xhttpSettings"] == {"path": "/test-path", "mode": "stream-one"}
+        assert stream["xhttpSettings"] == {"path": "/test-path"}
+        assert "mode" not in stream["xhttpSettings"]
         assert stream["security"] == "reality"
         assert stream["realitySettings"]["target"] == "reality.example.com:443"
         assert stream["realitySettings"]["serverNames"] == ["reality.example.com"]
+        assert stream["realitySettings"]["privateKey"] == "test-private"
+        assert stream["realitySettings"]["shortIds"] == ["0123456789abcdef"]
     expected = "none" if profile == "plain" else "mlkem768x25519plus.native.600s.100-111-1111.test-server-secret"
     assert all(i["settings"]["decryption"] == expected for i in config["inbounds"])
 PY
@@ -172,7 +176,8 @@ connections=$(VLESS_XHTTP_NO_MAIN=1 /bin/bash -c '
     mlkem768x25519plus.native.600s.100-111-1111.client
 ' bash "$SCRIPT")
 assert_contains "$connections" '模式：VLESS + XHTTP + REALITY + Encryption'
-assert_contains "$connections" 'XHTTP Mode：stream-one'
+assert_contains "$connections" '服务端 XHTTP Mode：auto（接受客户端选择）'
+assert_contains "$connections" '客户端初始建议：stream-one'
 assert_contains "$connections" 'HTTP：优先 HTTP/2'
 assert_contains "$connections" '服务器 IPv4：203.0.113.8'
 assert_contains "$connections" '服务器 IPv6：2001:db8::8'

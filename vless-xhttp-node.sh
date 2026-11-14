@@ -146,7 +146,7 @@ render_inbound() {
     --arg tag "$tag" --arg listen "$listen" --argjson port "$port" --arg uuid "$uuid" \
     --arg private "$private" --arg sid "$sid" --arg sni "$sni" --arg path "$path" \
     --arg decryption "$decryption" \
-    '{tag:$tag,listen:$listen,port:$port,protocol:"vless",settings:{clients:[{id:$uuid,flow:""}],decryption:$decryption},streamSettings:{network:"xhttp",xhttpSettings:{path:$path,mode:"stream-one"},security:"reality",realitySettings:{show:false,target:($sni+":443"),xver:0,serverNames:[$sni],privateKey:$private,shortIds:[$sid]}}}'
+    '{tag:$tag,listen:$listen,port:$port,protocol:"vless",settings:{clients:[{id:$uuid,flow:""}],decryption:$decryption},streamSettings:{network:"xhttp",xhttpSettings:{path:$path},security:"reality",realitySettings:{show:false,target:($sni+":443"),xver:0,serverNames:[$sni],privateKey:$private,shortIds:[$sid]}}}'
 }
 
 render_config() {
@@ -289,7 +289,7 @@ render_connection_info() {
   [[ -z "$ipv4" ]] || printf '服务器 IPv4：%s\n' "$ipv4"
   [[ -z "$ipv6" ]] || printf '服务器 IPv6：%s\n' "$ipv6"
   [[ -z "$domain" ]] || printf '服务器域名：%s（ip-version=%s）\n' "$domain" "$domain_ip_version"
-  printf '端口：%s\nUUID：%s\nSNI：%s\nREALITY Public Key：%s\nShort ID：%s\nXHTTP Path：%s\nXHTTP Mode：stream-one\nHTTP：优先 HTTP/2\n' \
+  printf '端口：%s\nUUID：%s\nSNI：%s\nREALITY Public Key：%s\nShort ID：%s\nXHTTP Path：%s\n服务端 XHTTP Mode：auto（接受客户端选择）\n客户端初始建议：stream-one\nHTTP：优先 HTTP/2\n' \
     "$port" "$uuid" "$sni" "$public" "$sid" "$path"
   if [[ "$profile" == encryption ]]; then
     printf 'VLESS Encryption：mlkem768x25519plus\n客户端 encryption：%s\n' "$encryption"
