@@ -1,3 +1,44 @@
+# 独立 VLESS + XHTTP + REALITY 测试节点
+
+`vless-xhttp-node.sh` 用于在不动现有 Snell、VLESS + REALITY + Vision 和 Trojan 的前提下，分别测试：
+
+- `plain`：VLESS + XHTTP + REALITY，`stream-one`，优先 HTTP/2；
+- `encryption`：上述组合再启用 Xray 官方 `vlessenc` 生成的 `mlkem768x25519plus` VLESS Encryption。
+
+两种模式使用独立的 systemd 服务、账户、配置目录、Xray 二进制和端口，可以同时安装：
+
+```bash
+git clone https://github.com/seniorbruce721/surge-vless-trojan.git && cd surge-vless-trojan
+sudo bash vless-xhttp-node.sh install plain
+sudo bash vless-xhttp-node.sh install encryption
+```
+
+默认端口分别是 TCP 24443 和 24444，安装时可以修改。端口已占用或无法可靠检查时会立即停止，不覆盖现有监听。脚本支持 Debian 12/13、Ubuntu 24.04/26.04，以及 IPv4-only、IPv6-only、双栈；双栈模式通过实际本地连接测试决定使用单监听还是双监听，不修改系统网络设置。
+
+常用命令：
+
+```bash
+sudo bash vless-xhttp-node.sh show plain
+sudo bash vless-xhttp-node.sh status plain
+sudo bash vless-xhttp-node.sh uninstall plain
+
+sudo bash vless-xhttp-node.sh show encryption
+sudo bash vless-xhttp-node.sh status encryption
+sudo bash vless-xhttp-node.sh uninstall encryption
+```
+
+安装成功和 `show` 会显示实际 IPv4、IPv6、可用域名、端口、UUID、SNI、REALITY Public Key、Short ID、XHTTP Path、mode；Encryption 模式还会显示仅供客户端使用的 `encryption` 参数。敏感信息只允许在交互式终端显示，并保存在各模式的受限目录中，不写入普通日志或仓库。
+
+Surge iOS 6.100.0（4026）的 TestFlight 更新日志已经宣布支持 XHTTP、`stream-one`、HTTP/2 和 `mlkem768x25519plus`。但公开在线手册尚未提供可以独立核验的 XHTTP/Encryption `[Proxy]` 完整参数名，所以当前脚本不会猜造配置行。请先在 4026 的节点编辑器或分享链接导入中核对脚本显示的字段；确认准确语法后再写入自己的 Surge 配置。脚本不会生成或修改完整 Surge 配置文件。
+
+脚本只读取防火墙状态，不添加、删除、重载或重置规则。你仍需自行放行所选 TCP 端口。卸载只删除指定模式自己的资源，不影响另一测试模式或现有 Snell、VLESS、Trojan、SSH、BBR、防火墙。
+
+> 验证边界：服务端配置已使用 Xray-core 官方稳定版 v26.11.9 的 `xray run -test` 验证；安装、端口冲突、双模式隔离和单模式卸载已通过本地 fixture。尚未连接 ISIF 或任何真实 VPS，也尚未验证公网 IPv4/IPv6、HTTP/2 实际协商、Surge 4026 导入与 Encryption 握手。
+
+参考：[Xray 官方 XHTTP 文档](https://xtls.github.io/en/config/transports/xhttp.html)、[官方 VLESS Encryption 文档](https://xtls.github.io/en/config/inbounds/vless.html)、[官方 XHTTP + REALITY 示例](https://github.com/XTLS/Xray-examples/tree/main/VLESS-XHTTP-Reality/minimal-steal_others)。
+
+---
+
 # 独立 VLESS + REALITY + Vision 节点
 
 `vless-node.sh` 是独立的个人 VPS 安装器，只管理以下资源：
